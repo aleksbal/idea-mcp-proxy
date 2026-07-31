@@ -247,6 +247,89 @@ encoding:
   `[size: N chars]` lines and actual content, not just that it doesn't
   crash.
 
+## Investigated but not built: "what JARs does class X need"
+
+A real user query -- *"identify all jar archives required to be imported
+for the class BatchInfrastructureConfiguration"* -- fell back to brute
+force: `Grep` for the class name, `Read` on the 2 matching files (the
+class exists in **two different modules**, `kwg-backend-ikd` and
+`kwg-backend-fusion` -- real ambiguity), `Glob` for `pom.xml`, then `Read`
+on the **root** `pom.xml`. No `idea` MCP tool was touched at all.
+
+This is a fundamentally different question than call-hierarchy verbosity
+-- it's not about one tool's output being too long, it's about no single
+tool answering the question, so investigating it meant checking what's
+actually available before proposing anything.
+
+**What's available, and why it doesn't directly answer this:**
+- `get_project_modules` -- flat list of modules (name + type only, e.g.
+  `{"name":"kwg-backend-ikd","type":"JAVA_MODULE"}`). Doesn't say what's
+  *in* a module or what a module depends on.
+- `get_project_dependencies` -- returns **every** dependency across the
+  **entire multi-module project** in one flat list (~7,100 characters,
+  100+ jars for `kwg-backend`), not scoped to one module or class. Can't
+  tell you what a specific file needs.
+- `get_repositories` -- VCS roots (git), unrelated to build/module
+  structure.
+- Between them: nothing maps "this class's imports -> the JARs that
+  provide them." That gap is real, not a discoverability problem fixable
+  with a better tool description.
+
+**The correctness problem with the brute-force path, not just the cost
+one:** reading the *root* `pom.xml` in a 4-module Maven project
+(confirmed via `get_project_modules`: `kwg-backend`,
+`kwg-backend-shared`, `kwg-backend-fusion`, `kwg-backend-ikd`) almost
+certainly misses the actual dependency -- Maven multi-module projects
+declare dependencies per-module, and Spring Boot's parent POM manages
+versions via a BOM invisible as plain text in either file. The
+brute-force approach wasn't just expensive, it was likely heading toward
+an **incomplete or wrong** answer.
+
+**Validated mechanism for a real fix:** `search_symbol` with
+`include_external=true` resolves an import straight to its source JAR.
+Confirmed against a real import in this file
+(`org.springframework.batch.core.configuration.support.JdbcDefaultBatchConfiguration`):
+resolves to
+`...\.m2\repository\org\springframework\batch\spring-batch-core\6.0.2\spring-batch-core-6.0.2-sources.jar!\...`.
+That's ground truth from the IDE's actual resolved classpath, not text
+inference from XML.
+
+**Why this isn't built as a documented multi-step workflow:** the naive
+chain -- `search_symbol` (locate class, disambiguate) -> `read_file` (get
+imports) -> one `search_symbol(include_external=true)` per external
+import -- comes to **~7 round trips** for this file (5 external imports
+out of 7 total, after dropping the 1 JDK and 1 project-internal import).
+That's not a clear win over the ~6 round trips brute force actually used;
+each round trip carries its own tool-call envelope overhead regardless of
+payload size, and more round trips also means more reasoning turns
+deciding what to call next. Documenting "call these tools in this order"
+for an agent to follow itself would not reliably beat brute force.
+
+**What would actually make it efficient:** the same principle as
+`analyze_calls` -- a single composite proxy tool (e.g.
+`list_class_dependencies`) that does all ~7 internal IDE calls itself via
+direct Python -> localhost HTTP (cheap, zero LLM-context cost, tens of ms
+each), and returns the agent exactly one compact result: a deduplicated
+JAR list, plus disambiguation candidates if the class name matches
+multiple files. The fan-out has to be hidden in code, not exposed as
+agent-visible tool calls, or it doesn't save anything.
+
+**Design sketch, if built later:**
+1. `search_symbol` to resolve the class name; return all candidates if
+   ambiguous (mirrors how `analyze_calls` already surfaces ambiguous
+   `symbolFqn`s) rather than silently picking one.
+2. `read_file` the resolved file, parse `import` lines.
+3. Drop `java.*`/`javax.*` (JDK) and same-project-prefix imports (not
+   external dependencies).
+4. Resolve each remaining import via `search_symbol(include_external=true)`;
+   extract the JAR name from the archive-entry-style path.
+5. Return the deduplicated JAR list.
+
+Not built yet -- documented here so a future agent (or session) doesn't
+have to re-derive this investigation from scratch, and so "should we
+build this" is a decision made with real numbers already in hand rather
+than from scratch.
+
 ## Next steps
 
 1. Decide whether/how to wire into `~/.claude.json` (global -- ask the
