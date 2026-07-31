@@ -31,6 +31,18 @@ one-hop shape. On a real query against a mid-size Java project (`kwg-backend`,
   full tree, but test noise removed and ancestry shown via indentation
   instead of a repeated string per node
 
+A second real-world query (`SRCByteReader.getInstance`, a widely-used
+factory method) exposed a real bug in the first version of this summary:
+43 of 51 total callers were *direct* -- one hop from the root, not several
+levels deep -- and the summarizer only collapsed leaves several levels
+down, so it listed all 43 individually (6,758 chars vs. 17,232 raw, only a
+61% reduction, most of it wasted on a wall of near-identical direct-caller
+lines). Fixed by splitting direct callers into "gateway" nodes (have
+further callers of their own -- worth naming individually) vs. leaf
+callers (fold into the same grouped/collapsed accounting as every other
+leaf, regardless of depth). After the fix: 866 chars, a 95% reduction.
+See `tests/test_summarize.py::test_render_summary_collapses_flat_direct_fanout`.
+
 That's roughly a 96-99% reduction depending on mode, achieved without
 losing the precision that made the tool worth using over grep in the first
 place -- the filtering/aggregation happens in plain deterministic code,

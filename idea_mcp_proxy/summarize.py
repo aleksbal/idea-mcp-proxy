@@ -180,21 +180,33 @@ def render_summary(
     test_path_pattern: re.Pattern[str] = DEFAULT_TEST_PATTERN,
     collapse_threshold: int = 4,
 ) -> str:
-    """Grouped summary: direct callers listed individually, then leaf callers
-    grouped by (containing file, production/test) instead of one line each.
+    """Grouped summary: direct callers that themselves have further callers
+    ("gateway" nodes -- worth naming individually since they represent a
+    branch) are listed one per line. Every leaf -- whether it's several
+    hops deep or a direct caller with no further callers of its own -- is
+    grouped by (containing file, production/test) instead of getting its
+    own line. Without this split, a symbol with a large *flat* fan-out
+    (many things call it directly, e.g. a widely-used factory method) would
+    list every direct caller individually and defeat the point of
+    summarizing at all -- this was found by testing against a real query
+    where 43 of 51 total callers were direct.
     """
     stats = compute_stats(root, test_path_pattern)
     lines = [
         f"Direct callers: {stats.direct_callers}",
         f"Total callers found: {stats.total_callers} "
         f"({stats.production_count} production, {stats.test_count} test)",
-        "",
-        "Direct:",
     ]
-    for child in root.children:
-        lines.append(f"  - {child.name}  ({child.file_path})")
 
-    # Group all leaves by file, production first.
+    gateway_children = [c for c in root.children if c.children]
+    if gateway_children:
+        lines.append("")
+        lines.append("Direct (with further callers of their own):")
+        for child in gateway_children:
+            lines.append(f"  - {child.name}  ({child.file_path})")
+
+    # Every leaf, whether several hops deep or a direct caller with no
+    # children of its own, grouped by file and production/test.
     leaves: list[CallNode] = []
 
     def collect_leaves(n: CallNode) -> None:

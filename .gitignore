@@ -13,3 +13,4 @@ scripts/probe_depth5.txt
 scripts/proxy_test_output.txt
 scripts/annotated_descriptions.txt
 scripts/cluster_descriptions.txt
+scripts/getinstance_summary.txt
