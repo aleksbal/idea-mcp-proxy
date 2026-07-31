@@ -21,6 +21,7 @@ from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import ServerRequestContext
 
 from .analyze_calls_tool import WRAPPED_TOOL_NAME, build_wrapped_tool, handle_analyze_calls
+from .tool_descriptions import DISAMBIGUATION_NOTES, with_disambiguation_note
 from .upstream import DEFAULT_UPSTREAM_URL, UpstreamConnection, connect as connect_upstream
 
 logger = logging.getLogger("idea_mcp_proxy")
@@ -37,6 +38,24 @@ async def _lifespan(_server: Server) -> AsyncIterator[UpstreamConnection]:
         yield upstream
 
 
+def _annotate_tool(t: types.Tool) -> types.Tool:
+    """Appends a disambiguation note to an otherwise-unmodified tool.
+
+    Only touches `description` -- schema, name, and behavior are untouched,
+    this is purely a discoverability aid for picking between near-duplicate
+    tools (the search_* family especially).
+    """
+    if t.name not in DISAMBIGUATION_NOTES:
+        return t
+    return types.Tool(
+        name=t.name,
+        title=t.title,
+        description=with_disambiguation_note(t.description, t.name),
+        input_schema=t.input_schema,
+        output_schema=t.output_schema,
+    )
+
+
 async def _on_list_tools(
     ctx: ServerRequestContext[UpstreamConnection, object],
     _params: types.PaginatedRequestParams | None,
@@ -44,7 +63,7 @@ async def _on_list_tools(
     upstream: UpstreamConnection = ctx.lifespan_context
     result = await upstream.session.list_tools()
     tools = [
-        build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else t
+        build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else _annotate_tool(t)
         for t in result.tools
     ]
     return types.ListToolsResult(tools=tools)

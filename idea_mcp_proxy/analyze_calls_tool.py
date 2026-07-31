@@ -14,6 +14,7 @@ import logging
 import mcp.types as types
 
 from .summarize import filter_by_paths, filter_by_scope, render_summary, render_tree
+from .tool_descriptions import with_disambiguation_note
 from .tree_parser import TreeParseError, parse_tree
 from .upstream import UpstreamConnection
 
@@ -56,13 +57,15 @@ _EXTRA_PROPERTIES: dict[str, object] = {
 def build_wrapped_tool(real_tool: types.Tool) -> types.Tool:
     schema = dict(real_tool.input_schema)
     schema["properties"] = {**schema.get("properties", {}), **_EXTRA_PROPERTIES}
+    description = (real_tool.description or "") + (
+        "\n\n[proxied] Supports extra `paths`/`sourceScope`/`mode` params to trim "
+        "output before it reaches the caller; see their descriptions."
+    )
+    description = with_disambiguation_note(description, real_tool.name)
     return types.Tool(
         name=real_tool.name,
         title=real_tool.title,
-        description=(real_tool.description or "") + (
-            "\n\n[proxied] Supports extra `paths`/`sourceScope`/`mode` params to trim "
-            "output before it reaches the caller; see their descriptions."
-        ),
+        description=description,
         input_schema=schema,
         output_schema=real_tool.output_schema,
     )

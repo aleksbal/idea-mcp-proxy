@@ -11,3 +11,5 @@ scripts/probe_output.txt
 scripts/probe_tree_only.txt
 scripts/probe_depth5.txt
 scripts/proxy_test_output.txt
+scripts/annotated_descriptions.txt
+scripts/cluster_descriptions.txt
