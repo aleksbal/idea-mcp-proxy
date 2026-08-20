@@ -1,6 +1,6 @@
 # idea-mcp-proxy
 
-A reverse proxy for the JetBrains IDE's built-in MCP server. It sits between
+A reverse proxy for the JetBrains IDE's built-in MCP server (https://www.jetbrains.com/help/idea/mcp-server.html). It sits between
 an MCP client (Claude Code) and the real IDE server, passes almost every
 tool through unchanged, and locally trims the one tool whose default output
 is disproportionately verbose: `analyze_calls`.
