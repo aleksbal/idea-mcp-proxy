@@ -13,7 +13,7 @@ under `idea-raw` (`http://127.0.0.1:64342/stream`) as a fallback. Read
 
 ## Why this exists
 
-For an AI agent like Claude Intellij Idea MCP service call `analyze_calls` (IDE call-hierarchy / find-usages) is precise in a way
+For an AI agent like Claude, the analyze_calls tool exposed via the JetBrains MCP Server (IDE call-hierarchy / find-usages) is precise in a way
 `grep` fundamentally cannot be -- it resolves real call relationships
 instead of text co-occurrence, so it can correctly say "zero callers" or
 disambiguate overloaded/shadowed names. But its raw output repeats every
