@@ -50,3 +50,9 @@ def test_file_names_normalize_to_their_class():
 def test_non_object_json_answer_counts_as_wrong():
     assert report.extract_answer("```json\n[]\n```") is None
     assert report.extract_answer('```json\n"x"\n```') is None
+
+
+def test_answer_fields_that_are_not_lists_score_as_wrong():
+    task = {"scoring": "set", "answer_key": "callers", "expected": ["A.x"]}
+    assert not report.score(task, {"callers": 42})["exact"]
+    assert not report.score(task, {"callers": {"A.x": 1}})["exact"]

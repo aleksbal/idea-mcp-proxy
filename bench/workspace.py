@@ -42,7 +42,9 @@ def reset(project: Path) -> list[str]:
     files = changed_files(project)
     if files:
         _git(project, "checkout", "-q", "--", ".")
-        _git(project, "clean", "-fdq", "--", "src")
+        # Whole checkout: a session may leave helper files anywhere. Without -x,
+        # git-ignored build output (target/) is kept.
+        _git(project, "clean", "-fdq")
     return files
 
 

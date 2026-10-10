@@ -44,7 +44,9 @@ def normalize(name: str, kind: str = "method") -> str:
 
 
 def score_set(got: list, expected: list, kind: str = "method") -> dict:
-    got_n = {normalize(g, kind) for g in got or []}
+    if not isinstance(got, list):
+        got = ["<answer field is not a list>"]  # malformed: scores as wrong, never crashes
+    got_n = {normalize(g, kind) for g in got}
     # An expected entry may list accepted spellings: "EventBindingInvocationHandler.invoke|EventUtils.invoke".
     # A match on any spelling counts as that entry.
     alternatives = [{normalize(a, kind) for a in str(e).split("|")} for e in expected]
