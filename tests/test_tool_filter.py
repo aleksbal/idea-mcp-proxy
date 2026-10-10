@@ -8,7 +8,20 @@ from mcp.client.stdio import stdio_client
 from idea_mcp_proxy.tool_filter import CODE_TOOLS, ToolFilter, UnknownPreset, parse_patterns
 
 
-def test_default_preset_keeps_code_tools_and_drops_the_rest():
+def test_default_preset_is_semantic_only():
+    from idea_mcp_proxy.tool_filter import DEFAULT_INCLUDE
+
+    f = ToolFilter.from_patterns(DEFAULT_INCLUDE)
+    for name in ("analyze_calls", "search_symbol", "get_symbol_info", "get_file_problems",
+                 "build_project", "rename_refactoring"):
+        assert f.allows(name)
+    # IDE duplicates of the agent's own Grep/Glob/Read/Edit are left out.
+    for name in ("search_text", "search_regex", "search_file", "read_file",
+                 "list_directory_tree", "apply_patch", "create_new_file"):
+        assert not f.allows(name)
+
+
+def test_code_preset_keeps_code_tools_and_drops_the_rest():
     f = ToolFilter.from_patterns(["@code"])
     for name in ("analyze_calls", "search_symbol", "rename_refactoring", "get_file_problems"):
         assert f.allows(name)
@@ -52,9 +65,9 @@ def test_hidden_tools_are_unlisted_and_refused(fake_ide):
 
     async def scenario():
         with anyio.fail_after(30):
-            # Default preset: of the fake IDE's echo/slow/search_text, only
+            # @code: of the fake IDE's echo/slow/where/search_text, only
             # search_text is a code tool.
-            async with stdio_client(_proxy(fake_ide.url)) as (read, write):
+            async with stdio_client(_proxy(fake_ide.url, "--include-tools", "@code")) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     assert [t.name for t in (await session.list_tools()).tools] == ["search_text"]

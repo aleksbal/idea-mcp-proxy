@@ -34,6 +34,7 @@ from .tool_filter import (
     UnknownPreset,
     parse_patterns,
 )
+from .compact import compact_tool, routing_instructions
 from .tool_descriptions import DISAMBIGUATION_NOTES, with_disambiguation_note
 from .upstream import (
     DEFAULT_UPSTREAM_URL,
@@ -87,6 +88,7 @@ def build_server(
     upstream_url: str = DEFAULT_UPSTREAM_URL,
     tool_filter: ToolFilter | None = None,
     project_path: str | None = None,
+    compact: bool = True,
 ) -> Server:
     tool_filter = tool_filter or ToolFilter.from_patterns(DEFAULT_INCLUDE)
     # Tools whose schema accepts projectPath, learned from the upstream tool list.
@@ -140,10 +142,15 @@ def build_server(
             raise MCPError(types.INTERNAL_ERROR, str(exc)) from exc
         learn(upstream, result.tools)
         tools = [
-            build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else _annotate_tool(t)
+            build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else t
             for t in result.tools
             if tool_filter.allows(t.name)
         ]
+        if compact:
+            tools = [compact_tool(t, hide_project_path=bool(project_path)) for t in tools]
+        else:
+            # build_wrapped_tool already annotated analyze_calls.
+            tools = [t if t.name == WRAPPED_TOOL_NAME else _annotate_tool(t) for t in tools]
         return types.ListToolsResult(tools=tools)
 
     async def on_call_tool(
@@ -176,7 +183,9 @@ def build_server(
     return Server(
         "idea-mcp-proxy",
         version="0.1.0",
-        instructions=(
+        # MCP clients (Claude Code) put server instructions into the agent's
+        # system prompt, so this is where the routing rules are stated once.
+        instructions=routing_instructions(tool_filter.allows) if compact else (
             "Reverse proxy for the JetBrains IDE MCP server. Exposes the IDE's "
             "code-intelligence tools; analyze_calls is trimmed locally (see its "
             "description for the paths/sourceScope/mode params)."
@@ -242,6 +251,15 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--descriptions",
+        choices=["compact", "original"],
+        default=os.environ.get("IDEA_MCP_DESCRIPTIONS", "compact"),
+        help=(
+            "compact (default): short tool descriptions saying when to use the IDE and "
+            "when Grep is enough, trimmed schemas; original: the IDE's own texts"
+        ),
+    )
+    parser.add_argument(
         "--host",
         default=PROXY_HOST,
         choices=sorted(LOOPBACK_HOSTS),
@@ -249,6 +267,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--port", type=int, default=PROXY_PORT, help="http transport only")
     args = parser.parse_args(argv)
+    # argparse doesn't validate defaults, and this one can come from the environment.
+    if args.descriptions not in ("compact", "original"):
+        parser.error(f"invalid --descriptions / IDEA_MCP_DESCRIPTIONS value {args.descriptions!r}: use compact or original")
 
     # stderr only: in stdio mode stdout is the MCP protocol channel.
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
@@ -262,7 +283,9 @@ def main(argv: list[str] | None = None) -> None:
     if project_path is None and args.transport == "stdio":
         project_path = os.getcwd()
     logger.info("default projectPath: %s", project_path or "(none)")
-    server = build_server(args.upstream, tool_filter, project_path or None)
+    server = build_server(
+        args.upstream, tool_filter, project_path or None, compact=args.descriptions == "compact"
+    )
     if args.transport == "stdio":
         anyio.run(_run_stdio, server)
     else:

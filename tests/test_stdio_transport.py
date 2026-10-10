@@ -18,7 +18,7 @@ from mcp.client.stdio import stdio_client
 def _proxy_params(upstream_url: str) -> StdioServerParameters:
     return StdioServerParameters(
         command=sys.executable,
-        args=["-m", "idea_mcp_proxy.server", "--transport", "stdio", "--upstream", upstream_url, "--include-tools", "*"],
+        args=["-m", "idea_mcp_proxy.server", "--transport", "stdio", "--upstream", upstream_url, "--include-tools", "*", "--descriptions", "original"],
     )
 
 
