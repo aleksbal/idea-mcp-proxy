@@ -14,19 +14,26 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import anyio
 import mcp.types as types
+from mcp import MCPError
 from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import ServerRequestContext
 from mcp.server.stdio import stdio_server
 
 from .analyze_calls_tool import WRAPPED_TOOL_NAME, build_wrapped_tool, handle_analyze_calls
 from .tool_descriptions import DISAMBIGUATION_NOTES, with_disambiguation_note
-from .upstream import DEFAULT_UPSTREAM_URL, UpstreamConnection, connect as connect_upstream
+from .upstream import (
+    DEFAULT_UPSTREAM_URL,
+    UpstreamConnection,
+    UpstreamUnavailable,
+    connect as connect_upstream,
+)
 
 logger = logging.getLogger("idea_mcp_proxy")
 
@@ -42,7 +49,6 @@ def _make_lifespan(upstream_url: str):
     @asynccontextmanager
     async def _lifespan(_server: Server) -> AsyncIterator[UpstreamConnection]:
         async with connect_upstream(upstream_url) as upstream:
-            logger.info("connected to upstream IDE server at %s", upstream_url)
             yield upstream
 
     return _lifespan
@@ -71,7 +77,12 @@ async def _on_list_tools(
     _params: types.PaginatedRequestParams | None,
 ) -> types.ListToolsResult:
     upstream: UpstreamConnection = ctx.lifespan_context
-    result = await upstream.session.list_tools()
+    try:
+        result = await upstream.list_tools()
+    except UpstreamUnavailable as exc:
+        # Surfaced to the MCP client as a JSON-RPC error with a readable message;
+        # the proxy itself stays up, so a later reconnect (/mcp) picks the IDE up.
+        raise MCPError(types.INTERNAL_ERROR, str(exc)) from exc
     tools = [
         build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else _annotate_tool(t)
         for t in result.tools
@@ -86,10 +97,16 @@ async def _on_call_tool(
     upstream: UpstreamConnection = ctx.lifespan_context
     arguments = params.arguments or {}
 
-    if params.name == WRAPPED_TOOL_NAME:
-        return await handle_analyze_calls(upstream, arguments)
-
-    return await upstream.session.call_tool(params.name, arguments)
+    try:
+        if params.name == WRAPPED_TOOL_NAME:
+            return await handle_analyze_calls(upstream, arguments)
+        return await upstream.call_tool(params.name, arguments)
+    except UpstreamUnavailable as exc:
+        # A tool error (not a protocol error) so the agent sees the reason and
+        # can tell the user to start the IDE instead of retrying blindly.
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=str(exc))], is_error=True
+        )
 
 
 def build_server(upstream_url: str = DEFAULT_UPSTREAM_URL) -> Server:
@@ -132,8 +149,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--upstream",
-        default=DEFAULT_UPSTREAM_URL,
-        help=f"URL of the JetBrains IDE MCP server (default: {DEFAULT_UPSTREAM_URL})",
+        default=os.environ.get("IDEA_MCP_UPSTREAM_URL", DEFAULT_UPSTREAM_URL),
+        help=(
+            "URL of the JetBrains IDE MCP server "
+            f"(default: $IDEA_MCP_UPSTREAM_URL or {DEFAULT_UPSTREAM_URL})"
+        ),
     )
     parser.add_argument(
         "--host",
