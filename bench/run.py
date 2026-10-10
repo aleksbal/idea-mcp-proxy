@@ -26,7 +26,6 @@ sys.path.insert(0, str(REPO))
 from idea_mcp_proxy.tool_filter import CODE_READ_TOOLS  # noqa: E402
 
 PROXY_EXE = REPO / ".venv" / "bin" / "idea-mcp-proxy"
-RAW_IDE_URL = "http://127.0.0.1:64342/stream"
 # The Claude Code CLI to run; must be logged in (`claude` -> /login).
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
 
@@ -48,11 +47,7 @@ STEERING_PROMPT = (
 ARMS = {
     # Claude Code's built-in tools only: the "grep everything" baseline.
     "grep": {"mcp": {"mcpServers": {}}},
-    # Built-ins plus every IDE tool straight from IntelliJ (62 in 2026.2), no proxy.
-    "ide-raw": {"mcp": {"mcpServers": {"idea": {"type": "http", "url": RAW_IDE_URL}}}},
-    # Built-ins plus only the read-only code tools, through this proxy (filtered
-    # tool list + trimmed analyze_calls). Same server name as ide-raw, so tool
-    # names are identical and only the proxy differs.
+    # Built-ins plus the IDE's read-only code tools, through this proxy.
     "ide-proxy": {"mcp": {"mcpServers": {"idea": {
         "type": "stdio", "command": str(PROXY_EXE), "args": ["--include-tools", "@code-read"]}}}},
     # ide-proxy plus an instruction to prefer the IDE tools. Not in the default
@@ -61,7 +56,7 @@ ARMS = {
         "type": "stdio", "command": str(PROXY_EXE), "args": ["--include-tools", "@code-read"]}}},
         "system_prompt": STEERING_PROMPT},
 }
-DEFAULT_ARMS = ("grep", "ide-raw", "ide-proxy")
+DEFAULT_ARMS = ("grep", "ide-proxy")
 
 ANSWER_INSTRUCTIONS = (
     "\n\nWork only by reading and searching; do not modify any files. "
