@@ -207,39 +207,59 @@ entries to `DISAMBIGUATION_NOTES` only where real confusion shows up.
 ## Running it
 
 Requires Python 3.11+ and IntelliJ IDEA running with its MCP server
-enabled (by default listening on `http://127.0.0.1:64342/stream`).
+enabled (Settings | Tools | MCP Server; by default it listens on
+`http://127.0.0.1:64342/stream`).
+
+The commands below use macOS/Linux paths. On Windows the virtualenv puts
+executables in `.venv\Scripts\` instead of `.venv/bin/` (e.g.
+`.venv\Scripts\idea-mcp-proxy.exe`); Windows variants are shown where
+they differ.
 
 ```bash
 cd idea-mcp-proxy
 python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"     # Windows: .venv\Scripts\pip
+.venv/bin/pip install -e ".[dev]"
+```
+
+```powershell
+# Windows
+py -m venv .venv
+.venv\Scripts\pip install -e ".[dev]"
 ```
 
 ### stdio (recommended)
 
-Register it with Claude Code; Claude Code starts the proxy itself for each
-session:
+Register it with Claude Code at user scope (available in all projects);
+Claude Code then starts the proxy itself for each session:
 
 ```bash
-claude mcp add idea -- /absolute/path/to/idea-mcp-proxy/.venv/bin/idea-mcp-proxy
+claude mcp add -s user idea -- /absolute/path/to/idea-mcp-proxy/.venv/bin/idea-mcp-proxy
 ```
 
-If the IDE's MCP server listens elsewhere, pass
-`--upstream http://127.0.0.1:<port>/stream` after the command.
+```powershell
+# Windows
+claude mcp add -s user idea -- C:\absolute\path\to\idea-mcp-proxy\.venv\Scripts\idea-mcp-proxy.exe
+```
+
+Without `-s user` the server is registered only for the current directory.
+Check it with `claude mcp get idea`. If the IDE's MCP server listens on a
+non-default port, append `--upstream http://127.0.0.1:PORT/stream`
+(replace `PORT`) after the executable path.
 
 ### HTTP (standalone daemon)
 
 ```bash
 .venv/bin/idea-mcp-proxy --transport http    # serves http://127.0.0.1:8765/stream
-claude mcp add --transport http idea http://127.0.0.1:8765/stream
+claude mcp add -s user --transport http idea http://127.0.0.1:8765/stream
 ```
 
+On Windows, start it with `.venv\Scripts\idea-mcp-proxy.exe --transport http`.
 You have to keep this process running yourself.
 
 ## Testing
 
 ```bash
-.venv/bin/pytest tests/ -v
+.venv/bin/pytest tests/ -v          # Windows: .venv\Scripts\pytest tests/ -v
 ```
 
 Two dev scripts, both write to `scripts/*.txt` (git-ignored) rather than
