@@ -230,7 +230,14 @@ py -m venv .venv
 ### stdio (recommended)
 
 Register it with Claude Code at user scope (available in all projects);
-Claude Code then starts the proxy itself for each session:
+Claude Code then starts the proxy itself for each session. If an `idea`
+server is already registered (e.g. the IDE's server directly, or this
+proxy in HTTP mode), `claude mcp add` refuses to overwrite it -- remove
+it first:
+
+```bash
+claude mcp remove -s user idea    # only if one already exists
+```
 
 ```bash
 claude mcp add -s user idea -- /absolute/path/to/idea-mcp-proxy/.venv/bin/idea-mcp-proxy
@@ -253,6 +260,7 @@ non-default port, append `--upstream http://127.0.0.1:PORT/stream`
 claude mcp add -s user --transport http idea http://127.0.0.1:8765/stream
 ```
 
+As above, `claude mcp remove -s user idea` first if the name is taken.
 On Windows, start it with `.venv\Scripts\idea-mcp-proxy.exe --transport http`.
 You have to keep this process running yourself.
 
