@@ -180,8 +180,9 @@ def run_one(task: dict, arm: str, rep: int, out_dir: Path, args) -> dict:
             subprocess.run(["git", "-C", str(args.project), "diff"], capture_output=True, text=True).stdout)
     if touched:
         reset(args.project)
-        summary["ide_sync_s"] = round(
-            wait_ide_synced([str(PROXY_EXE)], args.project, touched, task.get("sync_probe"), args.ide_baseline), 1)
+        if args.ide_baseline:
+            summary["ide_sync_s"] = round(
+                wait_ide_synced([str(PROXY_EXE)], args.project, touched, task.get("sync_probe"), args.ide_baseline), 1)
 
     # Valid = the IDE never failed when called. Whether it was called at all is
     # reported separately (ide_used): on grep cases not calling it is right.
@@ -226,11 +227,15 @@ def main() -> None:
     except PreflightError as exc:
         sys.exit(f"PREFLIGHT FAILED -- nothing was run: {exc}")
 
-    print("recording IntelliJ's errors on the untouched checkout (once per commit, ~4 min)...", flush=True)
-    args.ide_baseline = ide_error_baseline(
-        [str(PROXY_EXE)], args.project, REPO / "bench" / "results" / "ide_baseline.json")
-    print(f"baseline: {len(args.ide_baseline)} files, "
-          f"{sum(1 for e in args.ide_baseline.values() if e)} with IDE-only errors", flush=True)
+    # The IDE error baseline is only needed to re-sync IntelliJ after a reset,
+    # i.e. when an IDE arm runs; a grep-only run must not need the IDE at all.
+    args.ide_baseline = {}
+    if any(ARMS[a]["mcp"]["mcpServers"] for a in arms):
+        print("recording IntelliJ's errors on the untouched checkout (once per commit, ~4 min)...", flush=True)
+        args.ide_baseline = ide_error_baseline(
+            [str(PROXY_EXE)], args.project, REPO / "bench" / "results" / "ide_baseline.json")
+        print(f"baseline: {len(args.ide_baseline)} files, "
+              f"{sum(1 for e in args.ide_baseline.values() if e)} with IDE-only errors", flush=True)
 
     # Absolute: runs execute with the target project as cwd.
     out_dir = (args.out or REPO / "bench" / "results" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")).resolve()

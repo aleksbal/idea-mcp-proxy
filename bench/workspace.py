@@ -81,6 +81,7 @@ def ide_error_baseline(proxy_cmd: list[str], project: Path, cache: Path) -> dict
         return out
 
     errors = anyio.run(collect)
+    cache.parent.mkdir(parents=True, exist_ok=True)  # bench/results/ is git-ignored
     cache.write_text(json.dumps({"head": head, "errors": errors}))
     return errors
 
