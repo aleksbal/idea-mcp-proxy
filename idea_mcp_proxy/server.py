@@ -149,7 +149,8 @@ def build_server(
         if compact:
             tools = [compact_tool(t, hide_project_path=bool(project_path)) for t in tools]
         else:
-            tools = [_annotate_tool(t) for t in tools]
+            # build_wrapped_tool already annotated analyze_calls.
+            tools = [t if t.name == WRAPPED_TOOL_NAME else _annotate_tool(t) for t in tools]
         return types.ListToolsResult(tools=tools)
 
     async def on_call_tool(
