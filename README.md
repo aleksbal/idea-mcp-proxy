@@ -19,8 +19,8 @@ instead of text co-occurrence, so it can correctly say "zero callers" or
 disambiguate overloaded/shadowed names. But its raw output repeats every
 node's *entire ancestor path* as a string on every line, and renders every
 test-file caller as its own line even when dozens share an identical
-one-hop shape. On a real query against a mid-size Java project (`kwg-backend`,
-`SRCByteReader` class, call hierarchy at depth 5) this cost:
+one-hop shape. On a real query against a mid-size Java project (
+`MyByteReader` class, call hierarchy at depth 5) this cost:
 
 - **raw**: ~48,600 characters, all 75 callers rendered flat, ancestry
   duplicated per node
@@ -31,7 +31,7 @@ one-hop shape. On a real query against a mid-size Java project (`kwg-backend`,
   full tree, but test noise removed and ancestry shown via indentation
   instead of a repeated string per node
 
-A second real-world query (`SRCByteReader.getInstance`, a widely-used
+A second real-world query (`MyByteReader.getInstance`, a widely-used
 factory method) exposed a real bug in the first version of this summary:
 43 of 51 total callers were *direct* -- one hop from the root, not several
 levels deep -- and the summarizer only collapsed leaves several levels
@@ -78,7 +78,7 @@ local HTTP endpoint, no subprocess management needed.
 Not JSON -- a pre-rendered text blob using box-drawing characters:
 
 ```
-└─ + SRCByteReader(FileChannel, Charset) [filePath="...", treePath=[]]
+└─ + MyByteReader(FileChannel, Charset) [filePath="...", treePath=[]]
    └─ + createReader(Path, Charset) [filePath="...", treePath=["com...createReader(Path, Charset)"]]
       ├─ + getAsciiInstance(Path) [filePath="...", treePath=["...","...getAsciiInstance(Path)"]]
 ```
