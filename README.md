@@ -255,12 +255,20 @@ non-default port, append `--upstream http://127.0.0.1:PORT/stream`
 
 ### HTTP (standalone daemon)
 
+Start the proxy; it runs in the foreground and serves
+`http://127.0.0.1:8765/stream`:
+
 ```bash
-.venv/bin/idea-mcp-proxy --transport http    # serves http://127.0.0.1:8765/stream
+.venv/bin/idea-mcp-proxy --transport http
+```
+
+Then, in a separate terminal, register it (as above,
+`claude mcp remove -s user idea` first if the name is taken):
+
+```bash
 claude mcp add -s user --transport http idea http://127.0.0.1:8765/stream
 ```
 
-As above, `claude mcp remove -s user idea` first if the name is taken.
 On Windows, start it with `.venv\Scripts\idea-mcp-proxy.exe --transport http`.
 You have to keep this process running yourself.
 
