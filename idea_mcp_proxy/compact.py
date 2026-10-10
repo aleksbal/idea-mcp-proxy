@@ -68,18 +68,19 @@ DESCRIPTIONS: dict[str, str] = {
     "get_project_status": "Whether the IDE is still indexing; check if IDE calls time out.",
 }
 
-# (rule, IDE tools it routes to). A rule is only stated if at least one of its
-# tools is actually exposed, so the instructions never send the agent to a
-# tool the proxy would refuse.
-ROUTING_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+# (rule, the IDE tool it routes to). A rule is only stated if its tool is
+# exposed, so the instructions never send the agent to a tool the proxy would
+# refuse. One tool per rule, so a partially exposed group can't leak a name.
+ROUTING_RULES: tuple[tuple[str, tuple[str]], ...] = (
     ("Rename a code symbol: rename_refactoring (never Edit/sed).", ("rename_refactoring",)),
     ("After a signature change, rename or move: build_project, always.", ("build_project",)),
-    ("After editing a file: get_file_problems (or lint_files for several).", ("get_file_problems", "lint_files")),
+    ("After editing a file: get_file_problems.", ("get_file_problems",)),
+    ("After editing several files: lint_files.", ("lint_files",)),
     ("Who calls / impact / unused: analyze_calls, always (not Grep).", ("analyze_calls",)),
     ("Type or signature not visible in the text: get_symbol_info.", ("get_symbol_info",)),
     ("Where is a class/method declared: search_symbol.", ("search_symbol",)),
-    ("Modules / dependencies: get_project_modules / get_project_dependencies.",
-     ("get_project_modules", "get_project_dependencies")),
+    ("Module structure: get_project_modules.", ("get_project_modules",)),
+    ("Library dependencies: get_project_dependencies (not reading build files).", ("get_project_dependencies",)),
 )
 
 _ROUTING_HEADER = (
@@ -94,7 +95,7 @@ _ROUTING_FOOTER = (
 
 def routing_instructions(exposed: Callable[[str], bool]) -> str:
     """The routing table, limited to rules whose tools are exposed."""
-    rules = [rule for rule, tools in ROUTING_RULES if any(exposed(t) for t in tools)]
+    rules = [rule for rule, (tool,) in ROUTING_RULES if exposed(tool)]
     return "\n".join([_ROUTING_HEADER, *(f"- {r}" for r in rules), f"- {_ROUTING_FOOTER}"]) + "\n"
 
 

@@ -92,3 +92,14 @@ def test_routing_rules_are_sent_as_server_instructions(fake_ide):
         assert "analyze_calls" in read_only and "Grep" in read_only
 
     anyio.run(scenario)
+
+
+def test_each_routing_rule_names_only_exposed_tools():
+    from idea_mcp_proxy.compact import ROUTING_RULES, routing_instructions
+
+    exposed = {"lint_files", "get_project_dependencies"}
+    text = routing_instructions(lambda name: name in exposed)
+    all_tools = {tool for _, (tool,) in ROUTING_RULES}
+    for tool in all_tools - exposed:
+        assert tool not in text, tool
+    assert "lint_files" in text and "get_project_dependencies" in text
