@@ -94,7 +94,10 @@ def build_server(
     schemas_learned = False
 
     def learn(tools: list[types.Tool]) -> None:
+        # Replace, don't accumulate: after an IDE upgrade a tool may no longer
+        # accept projectPath, and the latest tools/list is the truth.
         nonlocal schemas_learned
+        takes_project_path.clear()
         takes_project_path.update(t.name for t in tools if _accepts_project_path(t))
         schemas_learned = True
 
