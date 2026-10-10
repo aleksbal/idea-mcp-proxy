@@ -1,10 +1,11 @@
 # Benchmark results: grep only vs grep + IntelliJ (through the proxy)
 
-Run 3, 2026-10-10. Model: Claude Sonnet (Claude Code 2.1, headless `claude -p`).
+Run 3, 2026-10-10. Model: `claude-sonnet-5-5` (Claude Code 2.1, headless `claude -p`).
 Project: Apache Commons Lang `rel/commons-lang-3.21.0` (~105k lines main, 363
 test files, one Maven module), open in IntelliJ IDEA 2026.2. 8 tasks x 2 arms x
-3 repetitions = 48 runs, total cost $2.88. Raw report: `results/run-3/report.md`
-(git-ignored, regenerate with `python bench/report.py bench/results/run-3`).
+3 repetitions = 48 runs, total cost $2.88. All data -- report, per-run metrics,
+edit diffs and the full transcript of every session -- is in
+[`runs/run-3/`](runs/run-3/).
 
 ## Question and decision rule
 
