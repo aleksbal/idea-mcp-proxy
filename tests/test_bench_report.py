@@ -40,3 +40,8 @@ def test_alternative_spellings_and_class_normalization():
                "expected": ["JsonToStringStyle", "AnnotationUtils"]}
     sc = report.score(classes, {"classes": ["ToStringStyle.JsonToStringStyle", "AnnotationUtils (anonymous ToStringStyle)"]})
     assert sc["exact"], sc
+
+
+def test_file_names_normalize_to_their_class():
+    assert report.normalize("ArchUtils.java", "class") == "archutils"
+    assert report.normalize("src/main/java/org/x/ArchUtils.java", "class") == "archutils"

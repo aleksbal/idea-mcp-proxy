@@ -8,6 +8,7 @@ next run would work against the previous run's code in the IDE.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import time
@@ -45,36 +46,78 @@ def reset(project: Path) -> list[str]:
     return files
 
 
+def _errors(text: str) -> list[list]:
+    """IntelliJ's errors for one file, as comparable [line, description] pairs."""
+    try:
+        return sorted([e.get("line"), e.get("description")] for e in json.loads(text).get("errors", []))
+    except (json.JSONDecodeError, AttributeError):
+        return [[None, text[:200]]]
+
+
+def ide_error_baseline(proxy_cmd: list[str], project: Path, cache: Path) -> dict[str, list]:
+    """IntelliJ's errors for every Java file of the untouched checkout.
+
+    Some files show IDE errors that don't affect compilation (e.g. javadoc
+    links to libraries that aren't dependencies), so "synced" can't mean "no
+    errors" -- it means "the same errors as the untouched checkout". Computed
+    once (~0.4 s per file) and cached per checkout commit.
+    """
+    head = _git(project, "rev-parse", "HEAD").strip()
+    if cache.exists():
+        data = json.loads(cache.read_text())
+        if data.get("head") == head:
+            return data["errors"]
+    files = sorted(str(f.relative_to(project)) for f in (project / "src").rglob("*.java"))
+
+    async def collect() -> dict[str, list]:
+        params = StdioServerParameters(command=proxy_cmd[0], args=proxy_cmd[1:], cwd=str(project))
+        out = {}
+        async with stdio_client(params, errlog=open("/dev/null", "w")) as (r, w):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+                for f in files:
+                    res = await s.call_tool("get_file_problems", {"filePath": f, "errorsOnly": True})
+                    out[f] = _errors(res.content[0].text)
+        return out
+
+    errors = anyio.run(collect)
+    cache.write_text(json.dumps({"head": head, "errors": errors}))
+    return errors
+
+
 def wait_ide_synced(proxy_cmd: list[str], project: Path, files: list[str], probe_symbol: str | None,
-                    timeout_s: float = 120) -> float:
+                    baseline: dict[str, list], timeout_s: float = 180) -> float:
     """Block until IntelliJ sees the reset checkout; returns seconds waited.
 
     Synced means: `probe_symbol` (a name only the edited code had) is no longer
-    found, and none of the previously changed Java files shows compile errors
-    (the reset checkout compiles). Raises TimeoutError otherwise.
+    found, and every previously changed Java file shows exactly the errors it
+    shows in the untouched checkout (`baseline`). Raises TimeoutError otherwise.
     """
     java = [f for f in files if f.endswith(".java") and (project / f).exists()]
 
     async def poll() -> float:
         params = StdioServerParameters(command=proxy_cmd[0], args=proxy_cmd[1:], cwd=str(project))
         start = time.monotonic()
+        last = ""
         async with stdio_client(params, errlog=open("/dev/null", "w")) as (r, w):
             async with ClientSession(r, w) as s:
                 await s.initialize()
                 while time.monotonic() - start < timeout_s:
-                    stale = False
+                    stale = None
                     if probe_symbol:
                         res = await s.call_tool("search_symbol", {"q": probe_symbol})
-                        stale = '"filePath"' in res.content[0].text
-                    for f in java if not stale else []:
+                        if '"filePath"' in res.content[0].text:
+                            stale = f"IDE still finds {probe_symbol!r}"
+                    for f in java if stale is None else []:
                         res = await s.call_tool("get_file_problems", {"filePath": f, "errorsOnly": True})
-                        if '"errors":[]' not in res.content[0].text.replace(" ", ""):
-                            stale = True
+                        if _errors(res.content[0].text) != baseline.get(f, []):
+                            stale = f"{f}: errors differ from the untouched checkout"
                             break
-                    if not stale:
+                    if stale is None:
                         return time.monotonic() - start
+                    last = stale
                     await anyio.sleep(2)
-        raise TimeoutError(f"IntelliJ did not pick up the reset of {files} within {timeout_s}s")
+        raise TimeoutError(f"IntelliJ did not pick up the reset within {timeout_s}s: {last}")
 
     return anyio.run(poll)
 

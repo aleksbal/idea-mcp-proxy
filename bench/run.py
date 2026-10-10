@@ -33,7 +33,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "bench"))
 from idea_mcp_proxy.tool_filter import SEMANTIC_TOOLS  # noqa: E402
 from preflight import PreflightError, preflight  # noqa: E402
-from workspace import changed_files, reset, verify, wait_ide_synced  # noqa: E402
+from workspace import changed_files, ide_error_baseline, reset, verify, wait_ide_synced  # noqa: E402
 
 PROXY_EXE = REPO / ".venv" / "bin" / "idea-mcp-proxy"
 # The Claude Code CLI to run; must be logged in (`claude` -> /login).
@@ -181,7 +181,7 @@ def run_one(task: dict, arm: str, rep: int, out_dir: Path, args) -> dict:
     if touched:
         reset(args.project)
         summary["ide_sync_s"] = round(
-            wait_ide_synced([str(PROXY_EXE)], args.project, touched, task.get("sync_probe")), 1)
+            wait_ide_synced([str(PROXY_EXE)], args.project, touched, task.get("sync_probe"), args.ide_baseline), 1)
 
     # Valid = the IDE never failed when called. Whether it was called at all is
     # reported separately (ide_used): on grep cases not calling it is right.
@@ -225,6 +225,12 @@ def main() -> None:
             print("preflight ok:", line, flush=True)
     except PreflightError as exc:
         sys.exit(f"PREFLIGHT FAILED -- nothing was run: {exc}")
+
+    print("recording IntelliJ's errors on the untouched checkout (once per commit, ~4 min)...", flush=True)
+    args.ide_baseline = ide_error_baseline(
+        [str(PROXY_EXE)], args.project, REPO / "bench" / "results" / "ide_baseline.json")
+    print(f"baseline: {len(args.ide_baseline)} files, "
+          f"{sum(1 for e in args.ide_baseline.values() if e)} with IDE-only errors", flush=True)
 
     # Absolute: runs execute with the target project as cwd.
     out_dir = (args.out or REPO / "bench" / "results" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")).resolve()

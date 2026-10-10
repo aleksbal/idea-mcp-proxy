@@ -35,6 +35,7 @@ def normalize(name: str, kind: str = "method") -> str:
     and `JsonToStringStyle` both become `jsontostringstyle`.
     """
     name = re.sub(r"\(.*", "", str(name)).replace("#", ".").replace("$", ".").strip()
+    name = re.sub(r"\.(java|kt)$", "", name.rsplit("/", 1)[-1])  # ".../ArchUtils.java" is the class ArchUtils
     parts = [p.strip() for p in name.split(".") if p.strip()]
     keep = 1 if kind == "class" else 2
     return ".".join(parts[-keep:]).lower() if parts else ""
@@ -95,29 +96,51 @@ def main() -> None:
 
     scored = []
     for s in summaries:
-        sc = score(tasks[s["task"]], extract_answer(s["result_text"]))
+        if s.get("kind") == "edit":
+            v = s.get("verification", {})
+            failed = [c["check"] for c in v.get("checks", []) if not c["ok"]]
+            sc = {"exact": bool(v.get("passed")), "precision": float(bool(v.get("passed"))),
+                  "recall": float(bool(v.get("passed"))), "missing": failed, "extra": []}
+        else:
+            sc = score(tasks[s["task"]], extract_answer(s["result_text"]))
         scored.append({**s, **sc})
     (args.results / "scored.json").write_text(json.dumps(scored, indent=2))
 
+    invalid = [s for s in scored if not s.get("valid", True)]
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for s in scored:
-        groups[(s["task"], s["arm"])].append(s)
+        if s.get("valid", True):  # runs where the IDE failed when called are excluded
+            groups[(s["task"], s["arm"])].append(s)
 
     print(f"# Benchmark results\n\nModel `{meta['model']}`, {meta['reps']} rep(s), project {meta['project']['name']} "
           f"`{meta['project']['tag']}`. Values are means over reps.\n")
-    print("| task | arm | correct | precision | recall | cost $ | input tok | output tok | turns | IDE calls ok/failed | built-in calls | wall s |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    print("| task | case | arm | correct | cost $ | input tok | output tok | turns | IDE calls ok | built-in calls | wall s |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
     mean = lambda rows, f: statistics.mean(f(r) for r in rows)  # noqa: E731
     for (task, arm), rows in sorted(groups.items()):
         print(
-            f"| {task} | {arm} | {sum(r['exact'] for r in rows)}/{len(rows)} "
-            f"| {mean(rows, lambda r: r['precision']):.2f} | {mean(rows, lambda r: r['recall']):.2f} "
+            f"| {task} | {rows[0].get('case', '')} | {arm} | {sum(r['exact'] for r in rows)}/{len(rows)} "
             f"| {mean(rows, lambda r: r['cost_usd'] or 0):.3f} | {mean(rows, total_input):,.0f} "
             f"| {mean(rows, lambda r: r['output_tokens'] or 0):,.0f} | {mean(rows, lambda r: r['num_turns'] or 0):.1f} "
-            f"| {mean(rows, lambda r: r.get('ide_calls_ok', 0)):.1f}/{mean(rows, lambda r: r.get('ide_calls_failed', 0)):.1f} "
+            f"| {mean(rows, lambda r: r.get('ide_calls_ok', 0)):.1f} "
             f"| {mean(rows, lambda r: r['builtin_tool_calls']):.1f} "
             f"| {mean(rows, lambda r: r['wall_s']):.0f} |"
         )
+
+    print("\n## Totals per case and arm (valid runs)\n")
+    print("| case | arm | runs | correct | cost $ | mean turns | mean wall s | runs using the IDE |")
+    print("|---|---|---|---|---|---|---|---|")
+    for case in ("grep", "ide"):
+        for arm in meta["arms"]:
+            rows = [s for s in scored if s.get("case") == case and s["arm"] == arm and s.get("valid", True)]
+            if rows:
+                print(f"| {case} | {arm} | {len(rows)} | {sum(r['exact'] for r in rows)}/{len(rows)} "
+                      f"| {sum(r['cost_usd'] or 0 for r in rows):.2f} | {mean(rows, lambda r: r['num_turns'] or 0):.1f} "
+                      f"| {mean(rows, lambda r: r['wall_s']):.0f} | {sum(1 for r in rows if r.get('ide_used'))}/{len(rows)} |")
+    if invalid:
+        print("\n## Excluded: the IDE failed when called\n")
+        for s in invalid:
+            print(f"- `{s['run_id']}`: {s.get('ide_errors', [])[:1]}")
 
     wrong = [s for s in scored if not s["exact"]]
     if wrong:
