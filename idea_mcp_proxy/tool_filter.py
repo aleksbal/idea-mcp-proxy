@@ -31,6 +31,9 @@ CODE_READ_TOOLS = (
     "get_project_modules",
     "get_project_dependencies",
     "get_all_open_file_paths",
+    # Readiness check (indexing/scanning) JetBrains recommends before the
+    # heavier analysis tools; not exposed by every IDE version.
+    "get_project_status",
 )
 
 # Plus the IDE's code-aware editing, building and VCS status. Deliberately not
