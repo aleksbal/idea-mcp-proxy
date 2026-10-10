@@ -74,17 +74,21 @@ def test_routing_rules_are_sent_as_server_instructions(fake_ide):
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
-    from idea_mcp_proxy.compact import ROUTING_INSTRUCTIONS
-
     fake_ide.start()
 
-    async def scenario():
-        params = StdioServerParameters(command=sys.executable, args=["-m", "idea_mcp_proxy.server", "--upstream", fake_ide.url])
+    async def instructions(*extra):
+        params = StdioServerParameters(command=sys.executable, args=["-m", "idea_mcp_proxy.server", "--upstream", fake_ide.url, *extra])
         with anyio.fail_after(30):
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:
-                    init = await session.initialize()
-                    assert init.instructions == ROUTING_INSTRUCTIONS
-                    assert "rename_refactoring" in init.instructions
+                    return (await session.initialize()).instructions
+
+    async def scenario():
+        full = await instructions()
+        assert "rename_refactoring" in full and "build_project" in full and "analyze_calls" in full
+        # Read-only preset: no rules pointing at tools the proxy would refuse.
+        read_only = await instructions("--include-tools", "@semantic-read")
+        assert "rename_refactoring" not in read_only and "build_project" not in read_only
+        assert "analyze_calls" in read_only and "Grep" in read_only
 
     anyio.run(scenario)

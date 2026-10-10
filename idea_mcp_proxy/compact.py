@@ -11,6 +11,8 @@ semantics.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import mcp.types as types
 
 # Parameters not shown to the agent in compact mode: timeouts are better left
@@ -66,19 +68,35 @@ DESCRIPTIONS: dict[str, str] = {
     "get_project_status": "Whether the IDE is still indexing; check if IDE calls time out.",
 }
 
-ROUTING_INSTRUCTIONS = """\
-IntelliJ IDEA for this project, through idea-mcp-proxy. Use the IDE where text \
-search can't be exact, and the built-in tools for everything else:
-- Rename a code symbol: rename_refactoring (never Edit/sed).
-- After a signature change, rename or move: build_project, always.
-- After editing a file: get_file_problems (or lint_files for several).
-- Who calls / impact / unused: analyze_calls, always (not Grep).
-- Type or signature not visible in the text: get_symbol_info.
-- Where is a class/method declared: search_symbol.
-- Modules / dependencies: get_project_modules / get_project_dependencies.
-- Text, log messages, string literals, config keys, comments: Grep. Files by name: \
-Glob. Reading files: Read. Other edits: Edit.
-"""
+# (rule, IDE tools it routes to). A rule is only stated if at least one of its
+# tools is actually exposed, so the instructions never send the agent to a
+# tool the proxy would refuse.
+ROUTING_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Rename a code symbol: rename_refactoring (never Edit/sed).", ("rename_refactoring",)),
+    ("After a signature change, rename or move: build_project, always.", ("build_project",)),
+    ("After editing a file: get_file_problems (or lint_files for several).", ("get_file_problems", "lint_files")),
+    ("Who calls / impact / unused: analyze_calls, always (not Grep).", ("analyze_calls",)),
+    ("Type or signature not visible in the text: get_symbol_info.", ("get_symbol_info",)),
+    ("Where is a class/method declared: search_symbol.", ("search_symbol",)),
+    ("Modules / dependencies: get_project_modules / get_project_dependencies.",
+     ("get_project_modules", "get_project_dependencies")),
+)
+
+_ROUTING_HEADER = (
+    "IntelliJ IDEA for this project, through idea-mcp-proxy. Use the IDE where text "
+    "search can't be exact, and the built-in tools for everything else:"
+)
+_ROUTING_FOOTER = (
+    "Text, log messages, string literals, config keys, comments: Grep. Files by name: "
+    "Glob. Reading files: Read. Other edits: Edit."
+)
+
+
+def routing_instructions(exposed: Callable[[str], bool]) -> str:
+    """The routing table, limited to rules whose tools are exposed."""
+    rules = [rule for rule, tools in ROUTING_RULES if any(exposed(t) for t in tools)]
+    return "\n".join([_ROUTING_HEADER, *(f"- {r}" for r in rules), f"- {_ROUTING_FOOTER}"]) + "\n"
+
 
 # Shorter parameter descriptions where the IDE's are long; others are cut to
 # their first sentence.

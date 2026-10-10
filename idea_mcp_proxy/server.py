@@ -34,7 +34,7 @@ from .tool_filter import (
     UnknownPreset,
     parse_patterns,
 )
-from .compact import ROUTING_INSTRUCTIONS, compact_tool
+from .compact import compact_tool, routing_instructions
 from .tool_descriptions import DISAMBIGUATION_NOTES, with_disambiguation_note
 from .upstream import (
     DEFAULT_UPSTREAM_URL,
@@ -184,7 +184,7 @@ def build_server(
         version="0.1.0",
         # MCP clients (Claude Code) put server instructions into the agent's
         # system prompt, so this is where the routing rules are stated once.
-        instructions=ROUTING_INSTRUCTIONS if compact else (
+        instructions=routing_instructions(tool_filter.allows) if compact else (
             "Reverse proxy for the JetBrains IDE MCP server. Exposes the IDE's "
             "code-intelligence tools; analyze_calls is trimmed locally (see its "
             "description for the paths/sourceScope/mode params)."
