@@ -32,7 +32,7 @@ def test_stdio_proxy_lists_and_passes_through_tools(fake_ide):
                     await session.initialize()
 
                     tools = {t.name: t for t in (await session.list_tools()).tools}
-                    assert set(tools) == {"echo", "slow", "search_text"}
+                    assert set(tools) == {"echo", "slow", "where", "search_text"}
                     assert tools["echo"].description == "echoes its input"
                     # Disambiguation note is still applied in stdio mode.
                     assert "[disambiguation]" in tools["search_text"].description

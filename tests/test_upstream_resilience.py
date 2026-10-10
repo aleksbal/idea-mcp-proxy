@@ -53,7 +53,7 @@ def test_ide_started_after_proxy_is_picked_up(fake_ide):
         fake_ide.start()
 
         tools = (await session.list_tools()).tools
-        assert {t.name for t in tools} == {"echo", "slow", "search_text"}
+        assert {t.name for t in tools} == {"echo", "slow", "where", "search_text"}
         assert _text(await session.call_tool("echo", {"text": "x"})) == "echo:x:gen1"
 
     anyio.run(_with_proxy, fake_ide.url, body)
@@ -96,6 +96,9 @@ def test_ide_dying_during_a_call_is_reported_not_retried(fake_ide):
     fake_ide.start()
 
     async def body(session: ClientSession):
+        # Like a real client, list tools first, so the slow call goes out right
+        # away instead of after the proxy fetches the schemas itself.
+        await session.list_tools()
         result = None
 
         async def call():

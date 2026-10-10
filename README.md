@@ -176,6 +176,18 @@ idea-mcp-proxy --exclude-tools apply_patch,create_new_file
 
 Also settable as `IDEA_MCP_INCLUDE_TOOLS` / `IDEA_MCP_EXCLUDE_TOOLS`.
 
+### Default `projectPath`
+
+Every IDE tool takes an optional `projectPath`. With **more than one project
+open** in the IDE, a call without it fails ("Unable to determine the target
+project"), and agents rarely pass it unprompted: in the benchmark, 15 of 24
+IDE calls failed this way. The proxy fills it in when a call leaves it out:
+in stdio mode it defaults to the proxy's working directory, which is where
+Claude Code was started, i.e. the project. A `projectPath` the caller passes
+always wins. Override with `--project-path PATH` / `IDEA_MCP_PROJECT_PATH`, or
+disable with `--project-path ''`. HTTP mode has no default (a standalone
+daemon's working directory says nothing about the project).
+
 ### Tool description enrichment
 
 `idea_mcp_proxy/tool_descriptions.py` appends a short "[disambiguation]"
@@ -217,6 +229,8 @@ entries to `DISAMBIGUATION_NOTES` only where real confusion shows up.
 - Tool filtering: exposes 21 code tools by default instead of all 62,
   cutting tool definitions from ~25.6k to ~7k tokens per request; hidden
   tools are refused. See "Tool filtering".
+- Default `projectPath` from the client's working directory, so IDE calls
+  work with several projects open. See "Default `projectPath`".
 - Description enrichment for 8 tools whose purpose overlaps enough to
   cause wrong picks at discovery time (`search_file`/`search_text`/
   `search_regex`/`search_symbol` especially) -- see "Tool description
