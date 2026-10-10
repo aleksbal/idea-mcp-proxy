@@ -111,9 +111,14 @@ total on the probed instance (IntelliJ IDEA MCP Server 2026.2.0.1).
 Claude Code -> http://127.0.0.1:8765/stream (this proxy) -> http://127.0.0.1:64342/stream (real IDE server)
 ```
 
-- `idea_mcp_proxy/upstream.py` -- long-lived connection to the real server,
-  held open for the proxy process's lifetime via the MCP `Server`'s
-  lifespan hook (not reconnected per-request).
+- `idea_mcp_proxy/upstream.py` -- connection to the real server. Opened
+  lazily on first use (the proxy starts fine with the IDE off), reused
+  across requests, and re-established transparently when the IDE
+  restarts: a reused connection is pinged before each call and replaced
+  if stale. Tool calls themselves are never retried -- if the connection
+  breaks mid-call the IDE may already have executed it, so that is
+  reported instead. If the IDE is unreachable, tool calls return an error
+  result explaining that (and how to fix it) instead of the proxy dying.
 - `idea_mcp_proxy/server.py` -- the proxy itself. `on_list_tools` mirrors
   the real server's tool list, extending only `analyze_calls`'s schema.
   `on_call_tool` passes every tool through unchanged except `analyze_calls`,
@@ -174,16 +179,21 @@ entries to `DISAMBIGUATION_NOTES` only where real confusion shows up.
   The original standalone HTTP mode is still available via
   `--transport http`. Covered end-to-end by
   `tests/test_stdio_transport.py` against a fake IDE server.
+- Survives the IDE being off or restarting: no IDE needed at proxy
+  startup, transparent reconnect after an IDE restart, and a readable
+  "IntelliJ MCP server not reachable at ..." tool error while it's down.
+  Covered by `tests/test_upstream_resilience.py`, which stops and
+  restarts a fake IDE mid-session.
 - Description enrichment for 8 tools whose purpose overlaps enough to
   cause wrong picks at discovery time (`search_file`/`search_text`/
   `search_regex`/`search_symbol` especially) -- see "Tool description
   enrichment" above.
 
 **Not done:**
-- The upstream connection is opened once at proxy startup: if IntelliJ
-  isn't running then, or restarts mid-session, the proxy doesn't
-  reconnect (start a new Claude Code session, or `/mcp` reconnect).
-  Tracked in [issue 6](https://github.com/aleksbal/idea-mcp-proxy/issues/6).
+- The tool *list* is fetched when the session starts. If the IDE was off
+  then, the session has no `idea` tools until you run `/mcp` and
+  reconnect (tool calls themselves recover on their own). Could be fixed
+  by sending `tools/list_changed` once the IDE comes up.
 - MCP config is read at session start, so changes only take effect for
   **new** Claude Code sessions.
 - Only `analyze_calls` is wrapped. `get_file_problems`, `search_symbol`
@@ -251,7 +261,8 @@ claude mcp add -s user idea -- C:\absolute\path\to\idea-mcp-proxy\.venv\Scripts\
 Without `-s user` the server is registered only for the current directory.
 Check it with `claude mcp get idea`. If the IDE's MCP server listens on a
 non-default port, append `--upstream http://127.0.0.1:PORT/stream`
-(replace `PORT`) after the executable path.
+(replace `PORT`) after the executable path, or set the
+`IDEA_MCP_UPSTREAM_URL` environment variable.
 
 ### HTTP (standalone daemon)
 

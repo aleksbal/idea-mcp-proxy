@@ -79,7 +79,7 @@ async def handle_analyze_calls(
     source_scope = args.pop("sourceScope", "all")
     mode = args.pop("mode", "summary")
 
-    result = await upstream.session.call_tool(WRAPPED_TOOL_NAME, args)
+    result = await upstream.call_tool(WRAPPED_TOOL_NAME, args)
 
     raw_text_parts = [c.text for c in result.content if isinstance(c, types.TextContent)]
     raw_text = "\n".join(raw_text_parts)
