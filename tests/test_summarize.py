@@ -54,7 +54,7 @@ def test_tree_cut_by_the_depth_limit_says_so():
     tree = render_tree(filter_by_scope(root, "production"))
     assert "INCOMPLETE" in tree
     assert "org.apache.commons.lang3.reflect.MethodUtils.invokeMethod(Object, String)" in tree
-    marked = [ln for ln in tree.splitlines() if "[+ more callers" in ln]
+    marked = [ln for ln in tree.splitlines() if "[+ more" in ln]
     assert any("invokeMethod(Object, String)  " in ln for ln in marked)
     # Real leaves (no '+' from the IDE) are not marked, and neither are nodes
     # whose only callers were tests removed by sourceScope.
@@ -69,4 +69,17 @@ def test_complete_tree_is_not_marked_incomplete():
     raw = (FIXTURES / "analyze_calls_depth5.txt").read_text(encoding="utf-8")
     root = parse_tree(raw, root_signature="com.csc.conan.format.src.unmarshalling.fixedbyte.SRCByteReader.SRCByteReader(FileChannel, Charset)")
     text = render_tree(root)
-    assert ("INCOMPLETE" in text) == any(ln for ln in text.splitlines() if "[+ more callers" in ln)
+    assert ("INCOMPLETE" in text) == any(ln for ln in text.splitlines() if "[+ more" in ln)
+
+
+def test_incompleteness_survives_filters_that_remove_the_cut_nodes():
+    from idea_mcp_proxy.summarize import filter_by_scope, render_summary, render_tree
+    from idea_mcp_proxy.tree_parser import parse_tree
+
+    raw = (FIXTURES / "analyze_calls_depth_cut.txt").read_text(encoding="utf-8")
+    root = parse_tree(raw, root_signature="org.apache.commons.lang3.reflect.MemberUtils.isMatchingMethod(Method, Class<?>[])")
+    # The cut nodes are production methods; sourceScope=test removes them, but
+    # test callers beyond them may exist, so the result must still say so.
+    only_tests = filter_by_scope(root, "test")
+    assert "INCOMPLETE" in render_tree(only_tests, unfiltered=root)
+    assert "INCOMPLETE" in render_summary(only_tests, unfiltered=root)
