@@ -27,6 +27,13 @@ from mcp.server.lowlevel.server import ServerRequestContext
 from mcp.server.stdio import stdio_server
 
 from .analyze_calls_tool import WRAPPED_TOOL_NAME, build_wrapped_tool, handle_analyze_calls
+from .tool_filter import (
+    DEFAULT_INCLUDE,
+    PRESETS,
+    ToolFilter,
+    UnknownPreset,
+    parse_patterns,
+)
 from .tool_descriptions import DISAMBIGUATION_NOTES, with_disambiguation_note
 from .upstream import (
     DEFAULT_UPSTREAM_URL,
@@ -72,55 +79,75 @@ def _annotate_tool(t: types.Tool) -> types.Tool:
     )
 
 
-async def _on_list_tools(
-    ctx: ServerRequestContext[UpstreamConnection, object],
-    _params: types.PaginatedRequestParams | None,
-) -> types.ListToolsResult:
-    upstream: UpstreamConnection = ctx.lifespan_context
-    try:
-        result = await upstream.list_tools()
-    except UpstreamUnavailable as exc:
-        # Surfaced to the MCP client as a JSON-RPC error with a readable message;
-        # the proxy itself stays up, so a later reconnect (/mcp) picks the IDE up.
-        raise MCPError(types.INTERNAL_ERROR, str(exc)) from exc
-    tools = [
-        build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else _annotate_tool(t)
-        for t in result.tools
-    ]
-    return types.ListToolsResult(tools=tools)
+def build_server(
+    upstream_url: str = DEFAULT_UPSTREAM_URL,
+    tool_filter: ToolFilter | None = None,
+) -> Server:
+    tool_filter = tool_filter or ToolFilter.from_patterns(DEFAULT_INCLUDE)
 
+    async def on_list_tools(
+        ctx: ServerRequestContext[UpstreamConnection, object],
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListToolsResult:
+        upstream: UpstreamConnection = ctx.lifespan_context
+        try:
+            result = await upstream.list_tools()
+        except UpstreamUnavailable as exc:
+            # Surfaced to the MCP client as a JSON-RPC error with a readable message;
+            # the proxy itself stays up, so a later reconnect (/mcp) picks the IDE up.
+            raise MCPError(types.INTERNAL_ERROR, str(exc)) from exc
+        tools = [
+            build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else _annotate_tool(t)
+            for t in result.tools
+            if tool_filter.allows(t.name)
+        ]
+        return types.ListToolsResult(tools=tools)
 
-async def _on_call_tool(
-    ctx: ServerRequestContext[UpstreamConnection, object],
-    params: types.CallToolRequestParams,
-) -> types.CallToolResult | types.InputRequiredResult:
-    upstream: UpstreamConnection = ctx.lifespan_context
-    arguments = params.arguments or {}
+    async def on_call_tool(
+        ctx: ServerRequestContext[UpstreamConnection, object],
+        params: types.CallToolRequestParams,
+    ) -> types.CallToolResult | types.InputRequiredResult:
+        upstream: UpstreamConnection = ctx.lifespan_context
+        arguments = params.arguments or {}
 
-    try:
-        if params.name == WRAPPED_TOOL_NAME:
-            return await handle_analyze_calls(upstream, arguments)
-        return await upstream.call_tool(params.name, arguments)
-    except UpstreamUnavailable as exc:
-        # A tool error (not a protocol error) so the agent sees the reason and
-        # can tell the user to start the IDE instead of retrying blindly.
-        return types.CallToolResult(
-            content=[types.TextContent(type="text", text=str(exc))], is_error=True
-        )
+        if not tool_filter.allows(params.name):
+            # Hidden tools are refused, not just unlisted: a client that
+            # remembers or guesses a name must not get around the filter.
+            return types.CallToolResult(
+                content=[
+                    types.TextContent(
+                        type="text",
+                        text=(
+                            f"Tool {params.name!r} is not exposed by idea-mcp-proxy. "
+                            "Enable it with --include-tools (see idea-mcp-proxy --help)."
+                        ),
+                    )
+                ],
+                is_error=True,
+            )
 
+        try:
+            if params.name == WRAPPED_TOOL_NAME:
+                return await handle_analyze_calls(upstream, arguments)
+            return await upstream.call_tool(params.name, arguments)
+        except UpstreamUnavailable as exc:
+            # A tool error (not a protocol error) so the agent sees the reason and
+            # can tell the user to start the IDE instead of retrying blindly.
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=str(exc))], is_error=True
+            )
 
-def build_server(upstream_url: str = DEFAULT_UPSTREAM_URL) -> Server:
     return Server(
         "idea-mcp-proxy",
         version="0.1.0",
         instructions=(
-            "Reverse proxy for the JetBrains IDE MCP server. All tools are "
-            "passed through unchanged except analyze_calls, which is trimmed "
-            "locally (see its description for the paths/sourceScope/mode params)."
+            "Reverse proxy for the JetBrains IDE MCP server. Exposes the IDE's "
+            "code-intelligence tools; analyze_calls is trimmed locally (see its "
+            "description for the paths/sourceScope/mode params)."
         ),
         lifespan=_make_lifespan(upstream_url),
-        on_list_tools=_on_list_tools,
-        on_call_tool=_on_call_tool,
+        on_list_tools=on_list_tools,
+        on_call_tool=on_call_tool,
     )
 
 
@@ -156,6 +183,20 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--include-tools",
+        default=os.environ.get("IDEA_MCP_INCLUDE_TOOLS", ",".join(DEFAULT_INCLUDE)),
+        help=(
+            "comma-separated IDE tools to expose: names, globs (search_*) or presets "
+            f"({', '.join('@' + k for k in PRESETS)}); '*' exposes everything "
+            f"(default: $IDEA_MCP_INCLUDE_TOOLS or {','.join(DEFAULT_INCLUDE)})"
+        ),
+    )
+    parser.add_argument(
+        "--exclude-tools",
+        default=os.environ.get("IDEA_MCP_EXCLUDE_TOOLS", ""),
+        help="comma-separated tools to hide, same syntax; applied after --include-tools",
+    )
+    parser.add_argument(
         "--host",
         default=PROXY_HOST,
         choices=sorted(LOOPBACK_HOSTS),
@@ -166,7 +207,13 @@ def main(argv: list[str] | None = None) -> None:
 
     # stderr only: in stdio mode stdout is the MCP protocol channel.
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
-    server = build_server(args.upstream)
+    try:
+        tool_filter = ToolFilter.from_patterns(
+            parse_patterns(args.include_tools), parse_patterns(args.exclude_tools)
+        )
+    except UnknownPreset as exc:
+        parser.error(str(exc))
+    server = build_server(args.upstream, tool_filter)
     if args.transport == "stdio":
         anyio.run(_run_stdio, server)
     else:

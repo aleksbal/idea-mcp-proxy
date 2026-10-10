@@ -146,6 +146,36 @@ New `analyze_calls` parameters (on top of the real tool's own schema):
 | `sourceScope` | `production` \| `test` \| `all` (default) | keeps only callers whose file matches (heuristic: `/test/` path segment or `*Test`/`*Tests`/`*IT`/`*Spec` filename) |
 | `mode` | `summary` (default) \| `tree` | `summary`: direct callers listed, rest grouped by file, test callers collapsed above a threshold. `tree`: full re-serialized tree, ancestry via indentation not a repeated string |
 
+### Tool filtering
+
+The IDE server exposes 62 tools (IntelliJ IDEA 2026.2), most of them unrelated
+to understanding code: debugger, databases, notebooks, run configurations, a
+terminal. Every tool definition is sent to the model on **every request**, so
+the unused ones cost tokens on every turn and bury the code-intelligence tools.
+Measured on the real server:
+
+| exposed | tools | definition size per request |
+|---|---|---|
+| everything (`--include-tools '*'`) | 62 | ~102k chars (~25.6k tokens) |
+| `@code` (default) | 21 | ~28k chars (~7.0k tokens) |
+| `@code-read` | 13 | ~20k chars (~4.9k tokens) |
+
+`@code-read` is navigation and inspection only (`analyze_calls`,
+`search_*`, `get_symbol_info`, `read_file`, `get_file_problems`, ...);
+`@code` adds the IDE's code-aware editing, building and VCS status
+(`rename_refactoring`, `apply_patch`, `build_project`, `git_status`, ...).
+See `idea_mcp_proxy/tool_filter.py`. Hidden tools are also **refused** if
+called by name. `execute_tool` (which invokes any tool by name) is in no
+preset, since it would get around the filter.
+
+```bash
+idea-mcp-proxy --include-tools @code-read                 # read-only
+idea-mcp-proxy --include-tools '@code,xdebug_*'           # plus the debugger
+idea-mcp-proxy --exclude-tools apply_patch,create_new_file
+```
+
+Also settable as `IDEA_MCP_INCLUDE_TOOLS` / `IDEA_MCP_EXCLUDE_TOOLS`.
+
 ### Tool description enrichment
 
 `idea_mcp_proxy/tool_descriptions.py` appends a short "[disambiguation]"
@@ -184,6 +214,9 @@ entries to `DISAMBIGUATION_NOTES` only where real confusion shows up.
   "IntelliJ MCP server not reachable at ..." tool error while it's down.
   Covered by `tests/test_upstream_resilience.py`, which stops and
   restarts a fake IDE mid-session.
+- Tool filtering: exposes 21 code tools by default instead of all 62,
+  cutting tool definitions from ~25.6k to ~7k tokens per request; hidden
+  tools are refused. See "Tool filtering".
 - Description enrichment for 8 tools whose purpose overlaps enough to
   cause wrong picks at discovery time (`search_file`/`search_text`/
   `search_regex`/`search_symbol` especially) -- see "Tool description
