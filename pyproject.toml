@@ -9,6 +9,9 @@ dependencies = [
     "uvicorn>=0.30.0",
 ]
 
+[project.scripts]
+idea-mcp-proxy = "idea_mcp_proxy.server:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
