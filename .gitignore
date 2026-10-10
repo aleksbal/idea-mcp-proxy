@@ -15,3 +15,4 @@ scripts/annotated_descriptions.txt
 scripts/cluster_descriptions.txt
 scripts/getinstance_summary.txt
 scripts/project_deps.txt
+bench/results/

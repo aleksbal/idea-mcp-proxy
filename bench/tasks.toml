@@ -1,0 +1,73 @@
+# Benchmark tasks. Ground truth was derived by hand from the pinned source
+# (argument types checked at every call site) and cross-checked against the
+# IDE's call hierarchy -- see `notes` per task.
+
+[project]
+name = "Apache Commons Lang"
+repo = "https://github.com/apache/commons-lang.git"
+tag = "rel/commons-lang-3.21.0"
+path = "~/Projects/bench-targets/commons-lang"
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "overload-callers"
+tags = ["pilot", "navigation", "overloads"]
+prompt = """
+In this project, which production methods (code under src/main/java, not tests)
+call the `Object[]` overload of `org.apache.commons.lang3.ArrayUtils.isEmpty`,
+i.e. `ArrayUtils.isEmpty(Object[])`? Ignore calls made from inside ArrayUtils.java
+itself. Calls to the other `isEmpty` overloads (boolean[], char[], int[], ...)
+do not count.
+"""
+answer_schema = """
+{"callers": ["SimpleClassName.methodName", ...]}
+"""
+scoring = "set"
+answer_key = "callers"
+expected = [
+  "StringUtils.getCommonPrefix",
+  "StringUtils.isAllBlank",
+  "StringUtils.isAllEmpty",
+  "StringUtils.isAnyBlank",
+  "StringUtils.isAnyEmpty",
+  "StringUtils.replaceEachOnce",
+  "Strings.containsAny",
+  "Strings.endsWithAny",
+  "Strings.startsWithAny",
+  "Validate.getMessage",
+  "WordUtils.containsAllWords",
+]
+notes = """
+9 isEmpty overloads in ArrayUtils. Grep for `ArrayUtils.isEmpty(` outside
+ArrayUtils finds 16 call sites in 11+5 methods; 5 are traps that pass a char[]
+and so resolve to isEmpty(char[]): StrTokenizer.tokenize, StrMatcher.charSetMatcher,
+StringUtils.containsAny(CharSequence, char...), StringUtils.indexOfAny,
+StringUtils.indexOfAnyBut. (Strings.containsAny IS a caller; the same-named
+StringUtils.containsAny is NOT.) Matches IntelliJ's INCOMING_CALLS hierarchy
+exactly, minus callers inside ArrayUtils. A first hand-derived key missed the 6
+StringUtils callers -- the benchmark's point in miniature. Unqualified `isEmpty(` is noise from
+StringUtils/ObjectUtils/CharSetUtils (private) and instance isEmpty() methods.
+No static imports of ArrayUtils, no method references.
+"""
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "zero-callers"
+tags = ["pilot", "navigation", "dead-code"]
+prompt = """
+Is `org.apache.commons.lang3.ObjectUtils.min(T...)` called anywhere in this
+project's production code (src/main/java)? List every production method that
+calls it, and separately every test class that calls it.
+"""
+answer_schema = """
+{"production_callers": ["SimpleClassName.methodName", ...], "test_classes": ["SimpleClassName", ...]}
+"""
+scoring = "multi_set"
+expected_sets = { production_callers = [], test_classes = ["ObjectUtilsTest"] }
+notes = """
+Correct answer: no production callers at all; only ObjectUtilsTest (11 calls,
+all in testMin). Confirmed with IntelliJ's INCOMING_CALLS hierarchy.
+`min(` occurs ~89 times in src/main (Math.min, NumberUtils.min, Range...), so
+grep has to rule all of them out. No static imports of ObjectUtils, no
+subclasses, no unqualified min( inside ObjectUtils.
+"""
