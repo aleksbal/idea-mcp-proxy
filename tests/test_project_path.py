@@ -55,3 +55,29 @@ def test_empty_value_disables_it(fake_ide):
     fake_ide.start()
     got = anyio.run(_calls, fake_ide.url, ["--project-path", ""], [("where", {})])
     assert got == ["project:<none>"]
+
+
+def test_schemas_are_relearned_after_the_ide_reconnects(fake_ide):
+    fake_ide.start()
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "idea_mcp_proxy.server", "--upstream", fake_ide.url, "--include-tools", "*", "--project-path", "/proj"],
+    )
+
+    async def scenario():
+        with anyio.fail_after(30):
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    await session.list_tools()
+                    assert (await session.call_tool("where", {})).content[0].text == "project:/proj"
+
+                    fake_ide.stop()
+                    fake_ide.start()  # the new IDE's "where" no longer takes projectPath
+
+                    # No tools/list from the client. The first call reconnects; from
+                    # then on the proxy must use the new IDE's schemas.
+                    await session.call_tool("where", {})
+                    assert (await session.call_tool("where", {})).content[0].text == "project:<none>"
+
+    anyio.run(scenario)

@@ -100,6 +100,9 @@ class UpstreamConnection:
         self._connect_timeout = connect_timeout
         self._current: _Attempt | None = None
         self._lock = anyio.Lock()
+        # Bumped on every successful (re)connect, so callers caching anything
+        # about the IDE (tool schemas) can tell a new IDE instance apart.
+        self.generation = 0
 
     async def list_tools(self) -> types.ListToolsResult:
         return await self._with_session(lambda s: s.list_tools())
@@ -168,6 +171,7 @@ class UpstreamConnection:
                 raise UpstreamUnavailable(self.url, TimeoutError("connect timed out"))
             if attempt.session is None:
                 raise UpstreamUnavailable(self.url, attempt.error)
+            self.generation += 1
             logger.info("connected to upstream IDE server at %s", self.url)
             return attempt
 

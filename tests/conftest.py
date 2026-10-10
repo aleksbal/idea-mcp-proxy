@@ -31,7 +31,8 @@ def _fake_ide_server(generation: int) -> Server:
                 types.Tool(
                     name="where",
                     description="echoes the projectPath it was called with",
-                    input_schema={"type": "object", "properties": {"projectPath": {"type": "string"}}},
+                    # A restarted ("upgraded") IDE no longer declares projectPath here.
+                    input_schema={"type": "object", "properties": {"projectPath": {"type": "string"}} if generation == 1 else {}},
                 ),
                 types.Tool(
                     name="search_text",

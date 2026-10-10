@@ -91,15 +91,17 @@ def build_server(
     tool_filter = tool_filter or ToolFilter.from_patterns(DEFAULT_INCLUDE)
     # Tools whose schema accepts projectPath, learned from the upstream tool list.
     takes_project_path: set[str] = set()
-    schemas_learned = False
+    # Upstream connection generation the schemas were learned from; a
+    # reconnect (IDE restart/upgrade) invalidates them.
+    learned_generation: int | None = None
 
-    def learn(tools: list[types.Tool]) -> None:
+    def learn(upstream: UpstreamConnection, tools: list[types.Tool]) -> None:
         # Replace, don't accumulate: after an IDE upgrade a tool may no longer
         # accept projectPath, and the latest tools/list is the truth.
-        nonlocal schemas_learned
+        nonlocal learned_generation
         takes_project_path.clear()
         takes_project_path.update(t.name for t in tools if _accepts_project_path(t))
-        schemas_learned = True
+        learned_generation = upstream.generation
 
     async def with_project_path(
         upstream: UpstreamConnection, name: str, arguments: dict[str, object]
@@ -116,9 +118,11 @@ def build_server(
         # project, which is exactly the call the IDE can't resolve.
         if not project_path or arguments.get("projectPath"):
             return arguments
-        if not schemas_learned:
-            # A call before any tools/list: learn the schemas once.
-            learn((await upstream.list_tools()).tools)
+        if learned_generation is None or learned_generation != upstream.generation:
+            # A call before any tools/list, or the first call on a new IDE
+            # connection: learn the schemas (again). list_tools() (re)connects
+            # first, so the generation is current once it returns.
+            learn(upstream, (await upstream.list_tools()).tools)
         if name not in takes_project_path:
             return arguments
         return {**arguments, "projectPath": project_path}
@@ -134,7 +138,7 @@ def build_server(
             # Surfaced to the MCP client as a JSON-RPC error with a readable message;
             # the proxy itself stays up, so a later reconnect (/mcp) picks the IDE up.
             raise MCPError(types.INTERNAL_ERROR, str(exc)) from exc
-        learn(result.tools)
+        learn(upstream, result.tools)
         tools = [
             build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else _annotate_tool(t)
             for t in result.tools
