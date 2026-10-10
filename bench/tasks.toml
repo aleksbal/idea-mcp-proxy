@@ -269,6 +269,13 @@ to int, the constant 3 narrows to char) but means repeat(120, (char) 3); only
 the tests catch it. Swapping repeat(String, int) callers by mistake breaks too.
 """
 
+# Both a correct edit and the reset code compile cleanly, so IDE diagnostics
+# can't show whether IntelliJ has seen the reset: ask it for the signature.
+[tasks.sync_check]
+tool = "get_symbol_info"
+args = { filePath = "src/main/java/org/apache/commons/lang3/StringUtils.java", line = 6172, column = 26 }
+expect = "char repeat, int count"
+
 [tasks.verify]
 compile = true
 tests = ["StringUtilsTest", "FormattableUtilsTest", "MultilineRecursiveToStringStyleTest"]

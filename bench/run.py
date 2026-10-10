@@ -182,7 +182,8 @@ def run_one(task: dict, arm: str, rep: int, out_dir: Path, args) -> dict:
         reset(args.project)
         if args.ide_baseline:
             summary["ide_sync_s"] = round(
-                wait_ide_synced([str(PROXY_EXE)], args.project, touched, task.get("sync_probe"), args.ide_baseline), 1)
+                wait_ide_synced([str(PROXY_EXE)], args.project, touched, task.get("sync_probe"),
+                                args.ide_baseline, sync_check=task.get("sync_check")), 1)
 
     # Valid = the IDE never failed when called. Whether it was called at all is
     # reported separately (ide_used): on grep cases not calling it is right.

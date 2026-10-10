@@ -45,3 +45,8 @@ def test_alternative_spellings_and_class_normalization():
 def test_file_names_normalize_to_their_class():
     assert report.normalize("ArchUtils.java", "class") == "archutils"
     assert report.normalize("src/main/java/org/x/ArchUtils.java", "class") == "archutils"
+
+
+def test_non_object_json_answer_counts_as_wrong():
+    assert report.extract_answer("```json\n[]\n```") is None
+    assert report.extract_answer('```json\n"x"\n```') is None

@@ -23,9 +23,11 @@ def extract_answer(text: str) -> dict | None:
     if not blocks:
         return None
     try:
-        return json.loads(blocks[-1])
+        answer = json.loads(blocks[-1])
     except json.JSONDecodeError:
         return None
+    # Valid JSON of the wrong shape ([] or a string) is a wrong answer, not a crash.
+    return answer if isinstance(answer, dict) else None
 
 
 def normalize(name: str, kind: str = "method") -> str:
@@ -142,7 +144,7 @@ def main() -> None:
         for s in invalid:
             print(f"- `{s['run_id']}`: {s.get('ide_errors', [])[:1]}")
 
-    wrong = [s for s in scored if not s["exact"]]
+    wrong = [s for s in scored if not s["exact"] and s.get("valid", True)]
     if wrong:
         print("\n## Incorrect answers\n")
         for s in wrong:

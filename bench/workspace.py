@@ -54,6 +54,16 @@ def _errors(text: str) -> list[list]:
         return [[None, text[:200]]]
 
 
+def _plain(text: str) -> str:
+    """An IDE answer as whitespace-normalized text (JSON answers decoded first)."""
+    try:
+        decoded = json.loads(text)
+        text = " ".join(str(v) for v in decoded.values()) if isinstance(decoded, dict) else str(decoded)
+    except json.JSONDecodeError:
+        pass
+    return " ".join(text.split())
+
+
 def ide_error_baseline(proxy_cmd: list[str], project: Path, cache: Path) -> dict[str, list]:
     """IntelliJ's errors for every Java file of the untouched checkout.
 
@@ -87,12 +97,16 @@ def ide_error_baseline(proxy_cmd: list[str], project: Path, cache: Path) -> dict
 
 
 def wait_ide_synced(proxy_cmd: list[str], project: Path, files: list[str], probe_symbol: str | None,
-                    baseline: dict[str, list], timeout_s: float = 180) -> float:
+                    baseline: dict[str, list], timeout_s: float = 180, sync_check: dict | None = None) -> float:
     """Block until IntelliJ sees the reset checkout; returns seconds waited.
 
     Synced means: `probe_symbol` (a name only the edited code had) is no longer
-    found, and every previously changed Java file shows exactly the errors it
-    shows in the untouched checkout (`baseline`). Raises TimeoutError otherwise.
+    found; `sync_check` (an IDE call whose answer differs between edited and
+    untouched code, e.g. the signature at the edited declaration) returns its
+    `expect` text again; and every previously changed Java file shows exactly
+    the errors it shows in the untouched checkout (`baseline`). Diagnostics
+    alone can't tell a correct edit from the reset code -- both compile -- so
+    edit tasks need a probe or a sync_check. Raises TimeoutError otherwise.
     """
     java = [f for f in files if f.endswith(".java") and (project / f).exists()]
 
@@ -109,6 +123,10 @@ def wait_ide_synced(proxy_cmd: list[str], project: Path, files: list[str], probe
                         res = await s.call_tool("search_symbol", {"q": probe_symbol})
                         if '"filePath"' in res.content[0].text:
                             stale = f"IDE still finds {probe_symbol!r}"
+                    if sync_check and stale is None:
+                        res = await s.call_tool(sync_check["tool"], sync_check["args"])
+                        if " ".join(sync_check["expect"].split()) not in _plain(res.content[0].text):
+                            stale = f"IDE doesn't show {sync_check['expect']!r} yet"
                     for f in java if stale is None else []:
                         res = await s.call_tool("get_file_problems", {"filePath": f, "errorsOnly": True})
                         if _errors(res.content[0].text) != baseline.get(f, []):
