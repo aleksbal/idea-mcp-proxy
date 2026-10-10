@@ -97,14 +97,33 @@ def build_command(task: dict, arm: str, mcp_config_path: Path, budget_usd: float
     return cmd
 
 
+def _result_text(block: dict) -> str:
+    content = block.get("content")
+    if isinstance(content, str):
+        return content
+    return " ".join(c.get("text", "") for c in content or [] if isinstance(c, dict))
+
+
 def summarize(events: list[dict], wall_s: float, exit_code: int) -> dict:
     tool_calls: Counter[str] = Counter()
+    ide_ids: set[str] = set()
+    ide_ok = ide_failed = 0
     for ev in events:
-        if ev.get("type") != "assistant":
-            continue
-        for block in ev.get("message", {}).get("content", []):
-            if block.get("type") == "tool_use":
+        message = ev.get("message")
+        for block in message.get("content", []) if isinstance(message, dict) else []:
+            if not isinstance(block, dict):
+                continue
+            if ev.get("type") == "assistant" and block.get("type") == "tool_use":
                 tool_calls[block["name"]] += 1
+                if block["name"].startswith("mcp__idea__"):
+                    ide_ids.add(block["id"])
+            elif ev.get("type") == "user" and block.get("type") == "tool_result" and block.get("tool_use_id") in ide_ids:
+                # The IDE reports some failures (e.g. "Unable to determine the target
+                # project") as plain text rather than is_error, so check both.
+                if block.get("is_error") or "Unable to determine the target project" in _result_text(block):
+                    ide_failed += 1
+                else:
+                    ide_ok += 1
 
     result = next((ev for ev in reversed(events) if ev.get("type") == "result"), {})
     usage = result.get("usage", {})
@@ -123,6 +142,8 @@ def summarize(events: list[dict], wall_s: float, exit_code: int) -> dict:
         "output_tokens": usage.get("output_tokens"),
         "tool_calls": dict(tool_calls),
         "ide_tool_calls": sum(n for name, n in tool_calls.items() if name.startswith("mcp__idea__")),
+        "ide_calls_ok": ide_ok,
+        "ide_calls_failed": ide_failed,
         "builtin_tool_calls": sum(n for name, n in tool_calls.items() if not name.startswith("mcp__")),
     }
 
@@ -157,7 +178,7 @@ def run_one(task: dict, arm: str, rep: int, out_dir: Path, args) -> dict:
     summary = {"run_id": run_id, "task": task["id"], "arm": arm, "rep": rep, **summarize(events, wall, proc.returncode)}
     print(
         f"    cost=${summary['cost_usd']} turns={summary['num_turns']} "
-        f"ide_calls={summary['ide_tool_calls']} builtin_calls={summary['builtin_tool_calls']} "
+        f"ide_calls={summary['ide_tool_calls']} (ok={summary['ide_calls_ok']} failed={summary['ide_calls_failed']}) builtin_calls={summary['builtin_tool_calls']} "
         f"subtype={summary['subtype']}",
         flush=True,
     )

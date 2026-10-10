@@ -105,7 +105,7 @@ def main() -> None:
 
     print(f"# Benchmark results\n\nModel `{meta['model']}`, {meta['reps']} rep(s), project {meta['project']['name']} "
           f"`{meta['project']['tag']}`. Values are means over reps.\n")
-    print("| task | arm | correct | precision | recall | cost $ | input tok | output tok | turns | IDE calls | built-in calls | wall s |")
+    print("| task | arm | correct | precision | recall | cost $ | input tok | output tok | turns | IDE calls ok/failed | built-in calls | wall s |")
     print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     mean = lambda rows, f: statistics.mean(f(r) for r in rows)  # noqa: E731
     for (task, arm), rows in sorted(groups.items()):
@@ -114,7 +114,8 @@ def main() -> None:
             f"| {mean(rows, lambda r: r['precision']):.2f} | {mean(rows, lambda r: r['recall']):.2f} "
             f"| {mean(rows, lambda r: r['cost_usd'] or 0):.3f} | {mean(rows, total_input):,.0f} "
             f"| {mean(rows, lambda r: r['output_tokens'] or 0):,.0f} | {mean(rows, lambda r: r['num_turns'] or 0):.1f} "
-            f"| {mean(rows, lambda r: r['ide_tool_calls']):.1f} | {mean(rows, lambda r: r['builtin_tool_calls']):.1f} "
+            f"| {mean(rows, lambda r: r.get('ide_calls_ok', 0)):.1f}/{mean(rows, lambda r: r.get('ide_calls_failed', 0)):.1f} "
+            f"| {mean(rows, lambda r: r['builtin_tool_calls']):.1f} "
             f"| {mean(rows, lambda r: r['wall_s']):.0f} |"
         )
 
