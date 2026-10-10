@@ -1,0 +1,127 @@
+diff --git a/src/main/java/org/apache/commons/lang3/StringUtils.java b/src/main/java/org/apache/commons/lang3/StringUtils.java
+index 720ecb0..f46e3bb 100644
+--- a/src/main/java/org/apache/commons/lang3/StringUtils.java
++++ b/src/main/java/org/apache/commons/lang3/StringUtils.java
+@@ -5239,7 +5239,7 @@ public static String leftPad(final String str, final int size, final char padCha
+         if (pads > PAD_LIMIT) {
+             return leftPad(str, size, String.valueOf(padChar));
+         }
+-        return repeat(padChar, pads).concat(str);
++        return repeat(pads, padChar).concat(str);
+     }
+ 
+     /**
+@@ -6153,9 +6153,9 @@ public static String removeStartIgnoreCase(final String str, final String remove
+      * Returns padding using the specified delimiter repeated to a given length.
+      *
+      * <pre>
+-     * StringUtils.repeat('e', 0)  = ""
+-     * StringUtils.repeat('e', 3)  = "eee"
+-     * StringUtils.repeat('e', -2) = ""
++     * StringUtils.repeat(0, 'e')  = ""
++     * StringUtils.repeat(3, 'e')  = "eee"
++     * StringUtils.repeat(-2, 'e') = ""
+      * </pre>
+      *
+      * <p>
+@@ -6169,7 +6169,7 @@ public static String removeStartIgnoreCase(final String str, final String remove
+      * @return String with repeated character.
+      * @see #repeat(String, int)
+      */
+-    public static String repeat(final char repeat, final int count) {
++    public static String repeat(final int count, final char repeat) {
+         if (count <= 0) {
+             return EMPTY;
+         }
+@@ -6205,7 +6205,7 @@ public static String repeat(final String repeat, final int count) {
+             return repeat;
+         }
+         if (inputLength == 1 && count <= PAD_LIMIT) {
+-            return repeat(repeat.charAt(0), count);
++            return repeat(count, repeat.charAt(0));
+         }
+         final int outputLength;
+         try {
+@@ -6215,7 +6215,7 @@ public static String repeat(final String repeat, final int count) {
+         }
+         switch (inputLength) {
+         case 1:
+-            return repeat(repeat.charAt(0), count);
++            return repeat(count, repeat.charAt(0));
+         case 2:
+             final char ch0 = repeat.charAt(0);
+             final char ch1 = repeat.charAt(1);
+@@ -7053,7 +7053,7 @@ public static String rightPad(final String str, final int size, final char padCh
+         if (pads > PAD_LIMIT) {
+             return rightPad(str, size, String.valueOf(padChar));
+         }
+-        return str.concat(repeat(padChar, pads));
++        return str.concat(repeat(pads, padChar));
+     }
+ 
+     /**
+diff --git a/src/main/java/org/apache/commons/lang3/builder/MultilineRecursiveToStringStyle.java b/src/main/java/org/apache/commons/lang3/builder/MultilineRecursiveToStringStyle.java
+index e9bfcda..049cb2a 100644
+--- a/src/main/java/org/apache/commons/lang3/builder/MultilineRecursiveToStringStyle.java
++++ b/src/main/java/org/apache/commons/lang3/builder/MultilineRecursiveToStringStyle.java
+@@ -211,7 +211,7 @@ private void resetIndent() {
+      * @return A StringBuilder with {spaces} leading space characters.
+      */
+     private String spacer(final int spaces) {
+-        return StringUtils.repeat(' ', spaces);
++        return StringUtils.repeat(spaces, ' ');
+     }
+ 
+ }
+diff --git a/src/main/java/org/apache/commons/lang3/text/FormattableUtils.java b/src/main/java/org/apache/commons/lang3/text/FormattableUtils.java
+index d78e0d7..e32ab43 100644
+--- a/src/main/java/org/apache/commons/lang3/text/FormattableUtils.java
++++ b/src/main/java/org/apache/commons/lang3/text/FormattableUtils.java
+@@ -104,7 +104,7 @@ public static Formatter append(final CharSequence seq, final Formatter formatter
+         }
+         final boolean leftJustify = (flags & FormattableFlags.LEFT_JUSTIFY) == FormattableFlags.LEFT_JUSTIFY;
+         if (width > buf.length()) {
+-            final String padding = StringUtils.repeat(padChar, width - buf.length());
++            final String padding = StringUtils.repeat(width - buf.length(), padChar);
+             buf.insert(leftJustify ? buf.length() : 0, padding);
+         }
+         return formatter.format(SIMPLEST_FORMAT, buf.toString());
+diff --git a/src/test/java/org/apache/commons/lang3/StringUtilsTest.java b/src/test/java/org/apache/commons/lang3/StringUtilsTest.java
+index 5e45c55..058f4c7 100644
+--- a/src/test/java/org/apache/commons/lang3/StringUtilsTest.java
++++ b/src/test/java/org/apache/commons/lang3/StringUtilsTest.java
+@@ -1794,9 +1794,9 @@ void testRemoveStartString() {
+ 
+     @Test
+     void testRepeat_CharInt() {
+-        assertEquals("zzz", StringUtils.repeat('z', 3));
+-        assertEquals("", StringUtils.repeat('z', 0));
+-        assertEquals("", StringUtils.repeat('z', -2));
++        assertEquals("zzz", StringUtils.repeat(3, 'z'));
++        assertEquals("", StringUtils.repeat(0, 'z'));
++        assertEquals("", StringUtils.repeat(-2, 'z'));
+     }
+ 
+     @Test
+diff --git a/src/test/java/org/apache/commons/lang3/text/FormattableUtilsTest.java b/src/test/java/org/apache/commons/lang3/text/FormattableUtilsTest.java
+index 592bd51..a9de380 100644
+--- a/src/test/java/org/apache/commons/lang3/text/FormattableUtilsTest.java
++++ b/src/test/java/org/apache/commons/lang3/text/FormattableUtilsTest.java
+@@ -129,7 +129,7 @@ void testIllegalEllipsis() {
+     @ValueSource(ints = {0, FormattableFlags.LEFT_JUSTIFY})
+     void testLargePadding(final int flags) {
+         final int width = 500_000;
+-        final String padding = StringUtils.repeat(' ', width - 3);
++        final String padding = StringUtils.repeat(width - 3, ' ');
+         final String expected = flags == 0 ? padding + "foo" : "foo" + padding;
+         assertEquals(expected, FormattableUtils.append("foo", new Formatter(), flags, width, -1).toString());
+     }
+@@ -138,7 +138,7 @@ void testLargePadding(final int flags) {
+     @ValueSource(ints = {0, FormattableFlags.LEFT_JUSTIFY})
+     void testLargePaddingWithEllipsis(final int flags) {
+         final int width = 500_000;
+-        final String padding = StringUtils.repeat('\u2603', width - 3);
++        final String padding = StringUtils.repeat(width - 3, '\u2603');
+         final String expected = flags == 0 ? padding + "fo*" : "fo*" + padding;
+         assertEquals(expected, FormattableUtils.append("foobar", new Formatter(), flags, width, 3, '\u2603', "*").toString());
+     }

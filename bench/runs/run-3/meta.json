@@ -1,0 +1,32 @@
+{
+  "model": "sonnet",
+  "project": {
+    "name": "Apache Commons Lang",
+    "repo": "https://github.com/apache/commons-lang.git",
+    "tag": "rel/commons-lang-3.21.0",
+    "path": "~/Projects/bench-targets/commons-lang",
+    "ide_health_files": [
+      "src/main/java/org/apache/commons/lang3/text/FormattableUtils.java",
+      "src/test/java/org/apache/commons/lang3/StringUtilsTest.java",
+      "src/test/java/org/apache/commons/lang3/SerializationUtilsTest.java"
+    ]
+  },
+  "arms": [
+    "grep",
+    "ide-proxy"
+  ],
+  "reps": 3,
+  "budget_usd": 1.0,
+  "edit_budget_usd": 2.0,
+  "tasks": [
+    "grep-literal-files",
+    "grep-message-methods",
+    "overload-callers",
+    "zero-callers",
+    "transitive-callers",
+    "impact-signature",
+    "rename-method",
+    "change-signature"
+  ],
+  "started": "2026-10-10T14:27:40.523771+00:00"
+}
