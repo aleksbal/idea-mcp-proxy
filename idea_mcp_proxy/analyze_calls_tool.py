@@ -91,6 +91,7 @@ async def handle_analyze_calls(
 
     try:
         root = parse_tree(raw_text, root_signature=symbol_fqn)
+        unfiltered = root
     except TreeParseError:
         # Format didn't match what we expected -- pass the raw response
         # through unmodified rather than risk a corrupted/partial tree.
@@ -109,6 +110,9 @@ async def handle_analyze_calls(
     if source_scope != "all":
         root = filter_by_scope(root, source_scope)  # type: ignore[arg-type]
 
-    output_text = render_summary(root) if mode == "summary" else render_tree(root)
+    output_text = (
+        render_summary(root, unfiltered=unfiltered) if mode == "summary"
+        else render_tree(root, unfiltered=unfiltered)
+    )
 
     return types.CallToolResult(content=[types.TextContent(type="text", text=output_text)])
