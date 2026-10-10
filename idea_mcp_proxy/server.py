@@ -114,15 +114,7 @@ def build_server(
             # Hidden tools are refused, not just unlisted: a client that
             # remembers or guesses a name must not get around the filter.
             return types.CallToolResult(
-                content=[
-                    types.TextContent(
-                        type="text",
-                        text=(
-                            f"Tool {params.name!r} is not exposed by idea-mcp-proxy. "
-                            "Enable it with --include-tools (see idea-mcp-proxy --help)."
-                        ),
-                    )
-                ],
+                content=[types.TextContent(type="text", text=tool_filter.refusal(params.name))],
                 is_error=True,
             )
 

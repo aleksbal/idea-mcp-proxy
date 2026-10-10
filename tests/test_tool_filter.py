@@ -79,3 +79,9 @@ def test_bad_preset_fails_at_startup():
     with pytest.raises(SystemExit) as exc:
         main(["--include-tools", "@nope"])
     assert exc.value.code == 2
+
+
+def test_refusal_points_at_the_setting_that_hides_the_tool():
+    f = ToolFilter.from_patterns(["@code"], ["apply_patch"])
+    assert "--exclude-tools" in f.refusal("apply_patch")
+    assert "--include-tools" in f.refusal("execute_terminal_command")

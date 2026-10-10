@@ -91,9 +91,25 @@ class ToolFilter:
         return cls(include=_expand(include), exclude=_expand(exclude))
 
     def allows(self, name: str) -> bool:
-        if any(fnmatchcase(name, p) for p in self.exclude):
-            return False
-        return not self.include or any(fnmatchcase(name, p) for p in self.include)
+        return not self.is_excluded(name) and (
+            not self.include or any(fnmatchcase(name, p) for p in self.include)
+        )
+
+    def is_excluded(self, name: str) -> bool:
+        return any(fnmatchcase(name, p) for p in self.exclude)
+
+    def refusal(self, name: str) -> str:
+        """Why `name` is hidden, phrased so the fix is actionable."""
+        if self.is_excluded(name):
+            # Exclusions win over inclusions, so --include-tools can't help.
+            return (
+                f"Tool {name!r} is not exposed by idea-mcp-proxy: it matches "
+                "--exclude-tools / $IDEA_MCP_EXCLUDE_TOOLS. Remove it from there to enable it."
+            )
+        return (
+            f"Tool {name!r} is not exposed by idea-mcp-proxy. "
+            "Add it to --include-tools / $IDEA_MCP_INCLUDE_TOOLS to enable it."
+        )
 
 
 def parse_patterns(value: str | None) -> list[str]:
