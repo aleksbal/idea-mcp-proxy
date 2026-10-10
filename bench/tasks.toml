@@ -1,0 +1,288 @@
+# Benchmark tasks, by the agreed routing rules (README "Routing rules"):
+#   case = "grep": text search is the right tool; the IDE should not be needed.
+#   case = "ide":  the routing rules send the agent to the IDE.
+# kind = "edit" tasks change code and are verified by compiling and running
+# tests; all others are questions scored against a verified answer key.
+# Ground truth was derived from the pinned source and cross-checked against
+# IntelliJ -- see `notes`. `ide_check` is the IDE call that answers the task;
+# bench/preflight.py runs it before any session and aborts unless the IDE's
+# answer contains the whole answer key.
+
+[project]
+name = "Apache Commons Lang"
+repo = "https://github.com/apache/commons-lang.git"
+tag = "rel/commons-lang-3.21.0"
+path = "~/Projects/bench-targets/commons-lang"
+# Files that compile cleanly with Maven; preflight requires IntelliJ to report
+# no errors in them (a test file proves test dependencies are resolved).
+ide_health_files = [
+  "src/main/java/org/apache/commons/lang3/text/FormattableUtils.java",
+  "src/test/java/org/apache/commons/lang3/StringUtilsTest.java",
+  "src/test/java/org/apache/commons/lang3/SerializationUtilsTest.java",
+]
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "grep-literal-files"
+tags = ["navigation", "text"]
+case = "grep"
+prompt = """
+Which Java source files in this project (main and test, under src/) contain the
+string literal "os.arch" (the system property key, with the quotes)?
+"""
+answer_schema = """
+{"files": ["FileName.java", ...]}
+"""
+scoring = "set"
+answer_key = "files"
+normalize = "class"
+expected = ["ArchUtils", "SystemProperties", "SystemPropertiesTest"]
+notes = """
+A plain text search; grep is the right tool. The literal also appears in
+changes.xml and RELEASE-NOTES-*.txt, which are not Java sources.
+"""
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "grep-message-methods"
+tags = ["navigation", "text"]
+case = "grep"
+prompt = """
+Which methods in this project throw an exception whose message starts with
+"Unterminated format element at position"?
+"""
+answer_schema = """
+{"methods": ["SimpleClassName.methodName", ...]}
+"""
+scoring = "set"
+answer_key = "methods"
+expected = ["ExtendedMessageFormat.parseFormatDescription", "ExtendedMessageFormat.readArgumentIndex"]
+notes = """
+A string-literal search plus reading the enclosing method; grep is the right tool.
+"""
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "overload-callers"
+tags = ["pilot", "navigation", "overloads"]
+prompt = """
+In this project, which production methods (code under src/main/java, not tests)
+call the `Object[]` overload of `org.apache.commons.lang3.ArrayUtils.isEmpty`,
+i.e. `ArrayUtils.isEmpty(Object[])`? Ignore calls made from inside ArrayUtils.java
+itself. Calls to the other `isEmpty` overloads (boolean[], char[], int[], ...)
+do not count.
+"""
+answer_schema = """
+{"callers": ["SimpleClassName.methodName", ...]}
+"""
+scoring = "set"
+answer_key = "callers"
+expected = [
+  "StringUtils.getCommonPrefix",
+  "StringUtils.isAllBlank",
+  "StringUtils.isAllEmpty",
+  "StringUtils.isAnyBlank",
+  "StringUtils.isAnyEmpty",
+  "StringUtils.replaceEachOnce",
+  "Strings.containsAny",
+  "Strings.endsWithAny",
+  "Strings.startsWithAny",
+  "Validate.getMessage",
+  "WordUtils.containsAllWords",
+]
+notes = """
+9 isEmpty overloads in ArrayUtils. Grep for `ArrayUtils.isEmpty(` outside
+ArrayUtils finds 16 call sites in 11+5 methods; 5 are traps that pass a char[]
+and so resolve to isEmpty(char[]): StrTokenizer.tokenize, StrMatcher.charSetMatcher,
+StringUtils.containsAny(CharSequence, char...), StringUtils.indexOfAny,
+StringUtils.indexOfAnyBut. (Strings.containsAny IS a caller; the same-named
+StringUtils.containsAny is NOT.) Matches IntelliJ's INCOMING_CALLS hierarchy
+exactly, minus callers inside ArrayUtils. A first hand-derived key missed the 6
+StringUtils callers -- the benchmark's point in miniature. Unqualified `isEmpty(` is noise from
+StringUtils/ObjectUtils/CharSetUtils (private) and instance isEmpty() methods.
+No static imports of ArrayUtils, no method references.
+"""
+case = "ide"
+
+[tasks.ide_check]
+tool = "analyze_calls"
+args = { symbolFqn = "org.apache.commons.lang3.ArrayUtils.isEmpty(Object[])", analysisKind = "INCOMING_CALLS", depth = 1, sourceScope = "production", mode = "tree", maxChildren = 300 }
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "zero-callers"
+tags = ["pilot", "navigation", "dead-code"]
+prompt = """
+Is `org.apache.commons.lang3.ObjectUtils.min(T...)` called anywhere in this
+project's production code (src/main/java)? List every production method that
+calls it, and separately every test class that calls it.
+"""
+answer_schema = """
+{"production_callers": ["SimpleClassName.methodName", ...], "test_classes": ["SimpleClassName", ...]}
+"""
+scoring = "multi_set"
+expected_sets = { production_callers = [], test_classes = ["ObjectUtilsTest"] }
+notes = """
+Correct answer: no production callers at all; only ObjectUtilsTest (11 calls,
+all in testMin). Confirmed with IntelliJ's INCOMING_CALLS hierarchy.
+`min(` occurs ~89 times in src/main (Math.min, NumberUtils.min, Range...), so
+grep has to rule all of them out. No static imports of ObjectUtils, no
+subclasses, no unqualified min( inside ObjectUtils.
+"""
+case = "ide"
+
+[tasks.ide_check]
+tool = "analyze_calls"
+args = { symbolFqn = "org.apache.commons.lang3.ObjectUtils.min", analysisKind = "INCOMING_CALLS", depth = 1, mode = "tree", maxChildren = 300 }
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "transitive-callers"
+tags = ["navigation", "transitive"]
+prompt = """
+Which methods in this project's production code (src/main/java) call
+`org.apache.commons.lang3.reflect.MemberUtils.isMatchingMethod(Method, Class<?>[])`
+directly OR indirectly, through any chain of calls of any length? Only follow
+calls inside this project's src/main/java (ignore the JDK and libraries).
+Report each method once by name, even if it has several overloads in the chain.
+"""
+answer_schema = """
+{"callers": ["SimpleClassName.methodName", ...]}
+"""
+scoring = "set"
+answer_key = "callers"
+expected = [
+  "MethodUtils.getMatchingAccessibleMethod",
+  "MethodUtils.getInvokeMethod",
+  "MethodUtils.getOverrideHierarchy",
+  "MethodUtils.invokeMethod",
+  "MethodUtils.invokeStaticMethod",
+  "EventUtils.addEventListener",
+  "EventUtils.bindEventsToMethod",
+  "EventBindingInvocationHandler.invoke|EventUtils.invoke",
+]
+notes = """
+From IntelliJ's INCOMING_CALLS hierarchy at depth 12 (closes at depth 7),
+first three levels re-checked with grep. 14 project methods, 8 distinct names:
+invokeMethod appears as 6 overloads, invokeStaticMethod as 2. The chain leaves
+MethodUtils into EventUtils, and through EventBindingInvocationHandler.invoke
+(an InvocationHandler, nested in EventUtils) further into JDK annotation code,
+which is excluded by the question.
+"""
+case = "ide"
+
+[tasks.ide_check]
+tool = "analyze_calls"
+args = { symbolFqn = "org.apache.commons.lang3.reflect.MemberUtils.isMatchingMethod", analysisKind = "INCOMING_CALLS", depth = 12, sourceScope = "production", mode = "tree", maxChildren = 200, maxNodes = 3000 }
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "impact-signature"
+tags = ["navigation", "overloads", "impact"]
+prompt = """
+I want to change the signature of `org.apache.commons.lang3.StringUtils.repeat(char, int)`
+(the char overload only). Which production methods (src/main/java) call exactly
+this overload and would therefore have to be updated? Calls to
+`repeat(String, int)` or `repeat(String, String, int)` don't count.
+"""
+answer_schema = """
+{"callers": ["SimpleClassName.methodName", ...]}
+"""
+scoring = "set"
+answer_key = "callers"
+expected = [
+  "StringUtils.leftPad",
+  "StringUtils.rightPad",
+  "StringUtils.repeat",
+  "FormattableUtils.append",
+  "MultilineRecursiveToStringStyle.spacer",
+]
+notes = """
+Matches IntelliJ's INCOMING_CALLS for repeat(char, int) exactly; argument types
+checked at every site. StringUtils.repeat here is repeat(String, int), which
+calls repeat(repeat.charAt(0), count) twice -- the parameter is itself named
+`repeat`. Traps: ClassUtils passes "[]" and a String "[" variable,
+DurationFormatUtils a String, repeat(String, String, int) calls the String
+overload; leftPad/rightPad have char and String overloads, only the char ones
+call it.
+"""
+case = "ide"
+
+[tasks.ide_check]
+tool = "analyze_calls"
+args = { symbolFqn = "org.apache.commons.lang3.StringUtils.repeat(char, int)", analysisKind = "INCOMING_CALLS", depth = 1, sourceScope = "production", mode = "tree", maxChildren = 300 }
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "rename-method"
+tags = ["edit", "rename"]
+case = "ide"
+kind = "edit"
+prompt = """
+Rename the method `org.apache.commons.lang3.SerializationUtils.clone(T)` to
+`deepClone`, and update every place in the project -- main and test code --
+that calls it. Don't rename any other `clone` method (ObjectUtils, ArrayUtils,
+Object.clone() etc. stay as they are). When you are done, main and test
+sources must compile.
+"""
+sync_probe = "deepClone"
+notes = """
+IntelliJ's rename_refactoring: 17 usages in 10 files (SerializationUtils plus 9
+test classes), compiles, SerializationUtilsTest passes. `clone` is declared by 5
+other classes (ArrayUtils has an overload per array type) and Object.clone() is
+called everywhere, so a text replace breaks the build. 2 mentions in comments
+are not renamed by the IDE either, so text absence is not checked.
+"""
+
+[tasks.verify]
+compile = true
+tests = ["SerializationUtilsTest", "ObjectUtilsTest", "RangeTest", "CharRangeTest", "CharSetTest"]
+contains = [
+  ["src/main/java/org/apache/commons/lang3/SerializationUtils.java", 'T deepClone\(final T object\)'],
+  ["src/main/java/org/apache/commons/lang3/ObjectUtils.java", 'public static <T> T clone\(final T obj\)'],
+  ["src/main/java/org/apache/commons/lang3/ArrayUtils.java", 'public static boolean\[\] clone\(final boolean\[\] array\)'],
+]
+lacks = [
+  ["src/main/java/org/apache/commons/lang3/SerializationUtils.java", 'T clone\(final T object\)'],
+]
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "change-signature"
+tags = ["edit", "signature"]
+case = "ide"
+kind = "edit"
+prompt = """
+Change the signature of `org.apache.commons.lang3.StringUtils.repeat(char, int)`
+so its parameters come in the order (int count, char ch), i.e.
+`public static String repeat(final int count, final char ch)`, and update every
+caller in main and test code so that it keeps its current behaviour. Don't
+change the `repeat(String, int)` or `repeat(String, String, int)` overloads.
+When you are done, main and test sources must compile and the tests must pass.
+"""
+notes = """
+Callers (IntelliJ INCOMING_CALLS): 5 production methods (StringUtils.leftPad,
+rightPad, repeat(String, int) twice, FormattableUtils.append,
+MultilineRecursiveToStringStyle.spacer) and FormattableUtilsTest, StringUtilsTest.
+Trap: a caller left as repeat('x', 3) still COMPILES after the swap (char widens
+to int, the constant 3 narrows to char) but means repeat(120, (char) 3); only
+the tests catch it. Swapping repeat(String, int) callers by mistake breaks too.
+"""
+
+# Both a correct edit and the reset code compile cleanly, so IDE diagnostics
+# can't show whether IntelliJ has seen the reset: ask it for the signature.
+[tasks.sync_check]
+tool = "get_symbol_info"
+args = { filePath = "src/main/java/org/apache/commons/lang3/StringUtils.java", line = 6172, column = 26 }
+expect = "char repeat, int count"
+
+[tasks.verify]
+compile = true
+tests = ["StringUtilsTest", "FormattableUtilsTest", "MultilineRecursiveToStringStyleTest"]
+contains = [
+  ["src/main/java/org/apache/commons/lang3/StringUtils.java", 'public static String repeat\(final int \w+, final char \w+\)'],
+  ["src/main/java/org/apache/commons/lang3/StringUtils.java", 'public static String repeat\(final String \w+, final int \w+\)'],
+]
+lacks = [
+  ["src/main/java/org/apache/commons/lang3/StringUtils.java", 'public static String repeat\(final char \w+, final int \w+\)'],
+]
