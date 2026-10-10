@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import threading
 import time
@@ -28,6 +29,12 @@ def _fake_ide_server(generation: int) -> Server:
                     input_schema={"type": "object", "properties": {}},
                 ),
                 types.Tool(
+                    name="where",
+                    description="echoes the projectPath it was called with",
+                    # A restarted ("upgraded") IDE no longer declares projectPath here.
+                    input_schema={"type": "object", "properties": {"projectPath": {"type": "string"}} if generation == 1 else {}},
+                ),
+                types.Tool(
                     name="search_text",
                     description="text search",
                     input_schema={"type": "object", "properties": {}},
@@ -38,6 +45,9 @@ def _fake_ide_server(generation: int) -> Server:
     async def on_call_tool(_ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
         if params.name == "slow":
             await anyio.sleep(5)
+        if params.name == "where":
+            got = (params.arguments or {}).get("projectPath", "<none>")
+            return types.CallToolResult(content=[types.TextContent(type="text", text=f"project:{got}")])
         text = (params.arguments or {}).get("text", "")
         # The generation shows which IDE "process" answered, so tests can
         # tell a reconnect to a restarted IDE apart from a stale connection.
@@ -72,7 +82,13 @@ class FakeIde:
         self._server = uvicorn.Server(
             uvicorn.Config(app, host="127.0.0.1", port=self.port, log_level="warning")
         )
-        self._thread = threading.Thread(target=self._server.run, daemon=True)
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+        def serve() -> None:
+            self._loop = asyncio.new_event_loop()
+            self._loop.run_until_complete(self._server.serve())
+
+        self._thread = threading.Thread(target=serve, daemon=True)
         self._thread.start()
         deadline = time.monotonic() + 10
         while not self._server.started:
@@ -81,8 +97,18 @@ class FakeIde:
             time.sleep(0.05)
 
     def stop(self) -> None:
+        """Stop like a crashed IDE: open connections are cut, in-flight calls die."""
         if self._server is None:
             return
+        server = self._server
+
+        def abort_connections() -> None:
+            for conn in list(server.server_state.connections):
+                if conn.transport is not None:
+                    conn.transport.abort()
+
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(abort_connections)
         self._server.should_exit = True
         self._server.force_exit = True
         self._thread.join(timeout=10)

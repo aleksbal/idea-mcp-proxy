@@ -61,6 +61,10 @@ def _make_lifespan(upstream_url: str):
     return _lifespan
 
 
+def _accepts_project_path(t: types.Tool) -> bool:
+    return "projectPath" in ((t.input_schema or {}).get("properties") or {})
+
+
 def _annotate_tool(t: types.Tool) -> types.Tool:
     """Appends a disambiguation note to an otherwise-unmodified tool.
 
@@ -82,8 +86,46 @@ def _annotate_tool(t: types.Tool) -> types.Tool:
 def build_server(
     upstream_url: str = DEFAULT_UPSTREAM_URL,
     tool_filter: ToolFilter | None = None,
+    project_path: str | None = None,
 ) -> Server:
     tool_filter = tool_filter or ToolFilter.from_patterns(DEFAULT_INCLUDE)
+    # Tools whose schema accepts projectPath, learned from the upstream tool list.
+    takes_project_path: set[str] = set()
+    # Upstream connection generation the schemas were learned from; a
+    # reconnect (IDE restart/upgrade) invalidates them.
+    learned_generation: int | None = None
+
+    def learn(upstream: UpstreamConnection, tools: list[types.Tool]) -> None:
+        # Replace, don't accumulate: after an IDE upgrade a tool may no longer
+        # accept projectPath, and the latest tools/list is the truth.
+        nonlocal learned_generation
+        takes_project_path.clear()
+        takes_project_path.update(t.name for t in tools if _accepts_project_path(t))
+        learned_generation = upstream.generation
+
+    async def with_project_path(
+        upstream: UpstreamConnection, name: str, arguments: dict[str, object]
+    ) -> dict[str, object]:
+        """Fill in projectPath when the caller left it out.
+
+        With several projects open, the IDE can't tell which one a call is for
+        and fails it ("Unable to determine the target project"). Agents rarely
+        pass projectPath unprompted, but the proxy knows the project: in stdio
+        mode it runs in the directory the MCP client was started in.
+        """
+        # A non-empty projectPath from the caller wins. An empty one is treated
+        # like a missing one on purpose: agents send "" when they don't know the
+        # project, which is exactly the call the IDE can't resolve.
+        if not project_path or arguments.get("projectPath"):
+            return arguments
+        if learned_generation is None or learned_generation != upstream.generation:
+            # A call before any tools/list, or the first call on a new IDE
+            # connection: learn the schemas (again). list_tools() (re)connects
+            # first, so the generation is current once it returns.
+            learn(upstream, (await upstream.list_tools()).tools)
+        if name not in takes_project_path:
+            return arguments
+        return {**arguments, "projectPath": project_path}
 
     async def on_list_tools(
         ctx: ServerRequestContext[UpstreamConnection, object],
@@ -96,6 +138,7 @@ def build_server(
             # Surfaced to the MCP client as a JSON-RPC error with a readable message;
             # the proxy itself stays up, so a later reconnect (/mcp) picks the IDE up.
             raise MCPError(types.INTERNAL_ERROR, str(exc)) from exc
+        learn(upstream, result.tools)
         tools = [
             build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else _annotate_tool(t)
             for t in result.tools
@@ -119,6 +162,7 @@ def build_server(
             )
 
         try:
+            arguments = await with_project_path(upstream, params.name, arguments)
             if params.name == WRAPPED_TOOL_NAME:
                 return await handle_analyze_calls(upstream, arguments)
             return await upstream.call_tool(params.name, arguments)
@@ -189,6 +233,15 @@ def main(argv: list[str] | None = None) -> None:
         help="comma-separated tools to hide, same syntax; applied after --include-tools",
     )
     parser.add_argument(
+        "--project-path",
+        default=os.environ.get("IDEA_MCP_PROJECT_PATH"),
+        help=(
+            "IDE project to target when a tool call doesn't name one (needed when "
+            "several projects are open). Default in stdio mode: the current directory, "
+            "i.e. where the MCP client was started; '' disables it."
+        ),
+    )
+    parser.add_argument(
         "--host",
         default=PROXY_HOST,
         choices=sorted(LOOPBACK_HOSTS),
@@ -205,7 +258,11 @@ def main(argv: list[str] | None = None) -> None:
         )
     except UnknownPreset as exc:
         parser.error(str(exc))
-    server = build_server(args.upstream, tool_filter)
+    project_path = args.project_path
+    if project_path is None and args.transport == "stdio":
+        project_path = os.getcwd()
+    logger.info("default projectPath: %s", project_path or "(none)")
+    server = build_server(args.upstream, tool_filter, project_path or None)
     if args.transport == "stdio":
         anyio.run(_run_stdio, server)
     else:
