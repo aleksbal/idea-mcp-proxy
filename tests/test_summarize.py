@@ -39,3 +39,34 @@ def test_render_summary_collapses_flat_direct_fanout():
     assert "runConfirmationAnalyze" in summary
 
     assert "Test call sites: 49 methods" in summary
+
+
+def test_tree_cut_by_the_depth_limit_says_so():
+    """Real IntelliJ output for MemberUtils.isMatchingMethod at the default depth:
+    the invokeMethod overloads at the bottom have further callers (EventUtils),
+    which the IDE marks with '+' but doesn't render. The proxy must not make that
+    look like a complete tree."""
+    from idea_mcp_proxy.summarize import filter_by_scope, render_summary, render_tree
+    from idea_mcp_proxy.tree_parser import parse_tree
+
+    raw = (FIXTURES / "analyze_calls_depth_cut.txt").read_text(encoding="utf-8")
+    root = parse_tree(raw, root_signature="org.apache.commons.lang3.reflect.MemberUtils.isMatchingMethod(Method, Class<?>[])")
+    tree = render_tree(filter_by_scope(root, "production"))
+    assert "INCOMPLETE" in tree
+    assert "org.apache.commons.lang3.reflect.MethodUtils.invokeMethod(Object, String)" in tree
+    marked = [ln for ln in tree.splitlines() if "[+ more callers" in ln]
+    assert any("invokeMethod(Object, String)  " in ln for ln in marked)
+    # Real leaves (no '+' from the IDE) are not marked, and neither are nodes
+    # whose only callers were tests removed by sourceScope.
+    assert all("testNullArgument" not in ln for ln in marked)
+    assert "INCOMPLETE" in render_summary(root)
+
+
+def test_complete_tree_is_not_marked_incomplete():
+    from idea_mcp_proxy.summarize import render_tree
+    from idea_mcp_proxy.tree_parser import parse_tree
+
+    raw = (FIXTURES / "analyze_calls_depth5.txt").read_text(encoding="utf-8")
+    root = parse_tree(raw, root_signature="com.csc.conan.format.src.unmarshalling.fixedbyte.SRCByteReader.SRCByteReader(FileChannel, Charset)")
+    text = render_tree(root)
+    assert ("INCOMPLETE" in text) == any(ln for ln in text.splitlines() if "[+ more callers" in ln)

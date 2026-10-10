@@ -77,6 +77,7 @@ def filter_by_scope(
             depth=node.depth,
             usages=node.usages,
             expandable=node.expandable,
+            cut=node.cut,
             truncated_children=node.truncated_children,
         )
         new_node.children = kept_children
@@ -126,7 +127,7 @@ def filter_by_paths(root: CallNode, include: list[str] | None, exclude: list[str
         new_node = CallNode(
             name=node.name, file_path=node.file_path, signature=node.signature,
             depth=node.depth, usages=node.usages, expandable=node.expandable,
-            truncated_children=node.truncated_children,
+            cut=node.cut, truncated_children=node.truncated_children,
         )
         new_node.children = kept_children
         return new_node
@@ -167,12 +168,45 @@ def render_tree(root: CallNode, max_depth: int | None = None) -> str:
         if max_depth is not None and indent > max_depth:
             return
         usage_note = f" [{node.usages} usages]" if node.usages > 1 else ""
-        lines.append("  " * indent + f"- {node.name}{usage_note}  ({node.file_path})")
+        cut_note = "  [+ more callers, not shown: depth limit]" if node.cut else ""
+        lines.append("  " * indent + f"- {node.name}{usage_note}  ({node.file_path}){cut_note}")
         for c in node.children:
             walk(c, indent + 1)
 
     walk(root, 0)
-    return "\n".join(lines)
+    return "\n".join(lines) + _cut_footer(root)
+
+
+def _cut_nodes(root: CallNode) -> list[CallNode]:
+    found: list[CallNode] = []
+
+    def walk(n: CallNode) -> None:
+        if n.cut:
+            found.append(n)
+        for c in n.children:
+            walk(c)
+
+    walk(root)
+    return found
+
+
+def _cut_footer(root: CallNode, limit: int = 10) -> str:
+    """Say explicitly when the tree is incomplete, and how to get the rest.
+
+    Without this, a tree cut by the depth limit looks complete: an agent asking
+    for all (indirect) callers would take the deepest rendered callers for the
+    last ones.
+    """
+    cut = _cut_nodes(root)
+    if not cut:
+        return ""
+    sigs = [n.signature for n in cut[:limit]]
+    more = f" (+{len(cut) - limit} more)" if len(cut) > limit else ""
+    return (
+        f"\n\nINCOMPLETE: {len(cut)} branch(es) cut at the depth limit -- these have further "
+        f"callers not shown{more}. Call analyze_calls again with a larger `depth`, or with "
+        f"symbolFqn set to one of: " + "; ".join(sigs)
+    )
 
 
 def render_summary(
@@ -242,4 +276,4 @@ def render_summary(
                 names = ", ".join(n.name for n in nodes)
                 lines.append(f"  - {f}: {names}")
 
-    return "\n".join(lines)
+    return "\n".join(lines) + _cut_footer(root)

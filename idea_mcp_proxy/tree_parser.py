@@ -77,6 +77,10 @@ class CallNode:
     depth: int
     usages: int = 1
     expandable: bool = False
+    # Has callers of its own (the IDE's "+") but none were rendered: the tree
+    # was cut here by the depth limit. Set once at parse time, so a node whose
+    # children are later removed by a filter is not mistaken for a cut one.
+    cut: bool = False
     truncated_children: int = 0  # count from a "... and N more" marker, if any
     children: list["CallNode"] = field(default_factory=list)
 
@@ -166,4 +170,6 @@ def parse_tree(raw_text: str, root_signature: str, root_name: str | None = None)
     if root is None:
         raise TreeParseError("no root node (treePath=[]) found in response")
 
+    for node in by_path.values():
+        node.cut = node.expandable and not node.children
     return root
