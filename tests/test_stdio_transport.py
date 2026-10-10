@@ -94,3 +94,12 @@ async def _exercise(params: StdioServerParameters) -> None:
 
             result = await session.call_tool("echo", {"text": "hi"})
             assert result.content[0].text == "echo:hi"
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "::"])
+def test_http_mode_rejects_non_loopback_host(host):
+    from idea_mcp_proxy.server import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--transport", "http", "--host", host])
+    assert exc.value.code == 2

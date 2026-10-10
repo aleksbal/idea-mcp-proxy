@@ -31,6 +31,9 @@ from .upstream import DEFAULT_UPSTREAM_URL, UpstreamConnection, connect as conne
 logger = logging.getLogger("idea_mcp_proxy")
 
 PROXY_HOST = "127.0.0.1"
+# The proxy has no authentication and passes through IDE tools that can run
+# commands and edit files, so it must never listen beyond this machine.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 PROXY_PORT = 8765
 PROXY_PATH = "/stream"
 
@@ -132,7 +135,12 @@ def main(argv: list[str] | None = None) -> None:
         default=DEFAULT_UPSTREAM_URL,
         help=f"URL of the JetBrains IDE MCP server (default: {DEFAULT_UPSTREAM_URL})",
     )
-    parser.add_argument("--host", default=PROXY_HOST, help="http transport only")
+    parser.add_argument(
+        "--host",
+        default=PROXY_HOST,
+        choices=sorted(LOOPBACK_HOSTS),
+        help="http transport only; loopback addresses only, the proxy is unauthenticated",
+    )
     parser.add_argument("--port", type=int, default=PROXY_PORT, help="http transport only")
     args = parser.parse_args(argv)
 
