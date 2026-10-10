@@ -1,10 +1,17 @@
-"""Run benchmark tasks headlessly in Claude Code, once per arm.
+"""Run benchmark tasks headlessly in Claude Code: grep only vs grep + IDE.
 
-Each run is one `claude -p` session in the target project with a fixed tool
-set. The raw stream-json event log is saved, plus a metrics summary: tokens,
-cost, turns, wall time and which tools were called.
+Each run is one `claude -p` session in the target project. Both arms have the
+same built-in tools (Read, Grep, Glob, Edit, Write, and Bash limited to mvn);
+the ide-proxy arm additionally has the IntelliJ tools through this proxy, with
+its default tool set, descriptions and routing instructions -- i.e. exactly
+what a user of the proxy gets.
 
-    python bench/run.py --tasks bench/tasks.toml --tasks-filter pilot --reps 1
+Before any session, bench/preflight.py must pass (IDE reachable, project
+identified, IDE answers every task correctly, checkout clean and compiling).
+Edit tasks are verified by compiling and running tests; the checkout is reset
+and IntelliJ re-synced after every run.
+
+    python bench/run.py --reps 3
 """
 
 from __future__ import annotations
@@ -23,73 +30,57 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-from idea_mcp_proxy.tool_filter import CODE_READ_TOOLS  # noqa: E402
+sys.path.insert(0, str(REPO / "bench"))
+from idea_mcp_proxy.tool_filter import SEMANTIC_TOOLS  # noqa: E402
+from preflight import PreflightError, preflight  # noqa: E402
+from workspace import changed_files, reset, verify, wait_ide_synced  # noqa: E402
 
 PROXY_EXE = REPO / ".venv" / "bin" / "idea-mcp-proxy"
 # The Claude Code CLI to run; must be logged in (`claude` -> /login).
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
 
-BUILTIN_TOOLS = "Read,Grep,Glob"
-
-# IDE tools that only read (the proxy's @code-read preset). Only these are
-# auto-approved in every IDE arm, so no arm can do more than look at the
-# code; anything else is denied by --permission-mode dontAsk.
-IDE_READ_TOOLS = list(CODE_READ_TOOLS)
-
-STEERING_PROMPT = (
-    "This project is open in IntelliJ IDEA, available through the `idea` MCP tools. "
-    "For questions about code structure -- who calls what, overloads, overrides, "
-    "implementations, symbol definitions -- prefer the semantic IDE tools "
-    "(analyze_calls, search_symbol, get_symbol_info) over Grep: they resolve real "
-    "types and calls instead of matching text."
-)
+BUILTIN_TOOLS = "Read,Grep,Glob,Edit,Write,Bash"
+# Bash only for Maven, so both arms can compile and run tests themselves.
+BUILTIN_ALLOWED = ["Read", "Grep", "Glob", "Edit", "Write", "Bash(mvn:*)"]
 
 ARMS = {
-    # Claude Code's built-in tools only: the "grep everything" baseline.
+    # Claude Code's built-in tools only.
     "grep": {"mcp": {"mcpServers": {}}},
-    # Built-ins plus the IDE's read-only code tools, through this proxy.
-    "ide-proxy": {"mcp": {"mcpServers": {"idea": {
-        "type": "stdio", "command": str(PROXY_EXE), "args": ["--include-tools", "@code-read"]}}}},
-    # ide-proxy plus an instruction to prefer the IDE tools. Not in the default
-    # set: run it only if ide-proxy alone doesn't get the IDE tools used.
-    "ide-proxy-steered": {"mcp": {"mcpServers": {"idea": {
-        "type": "stdio", "command": str(PROXY_EXE), "args": ["--include-tools", "@code-read"]}}},
-        "system_prompt": STEERING_PROMPT},
+    # Built-ins plus IntelliJ through this proxy, as a user gets it by default.
+    "ide-proxy": {"mcp": {"mcpServers": {"idea": {"type": "stdio", "command": str(PROXY_EXE)}}}},
 }
 DEFAULT_ARMS = ("grep", "ide-proxy")
 
-ANSWER_INSTRUCTIONS = (
+QUESTION_SUFFIX = (
     "\n\nWork only by reading and searching; do not modify any files. "
     "When you are done, end your reply with a fenced ```json block containing "
     "exactly this structure and nothing else:\n{schema}"
 )
+EDIT_SUFFIX = "\n\nWhen you are done, reply with DONE."
 
 
 def build_command(task: dict, arm: str, mcp_config_path: Path, budget_usd: float, model: str) -> list[str]:
-    cmd = [
-        CLAUDE_BIN,
-        "-p",
-        task["prompt"].strip() + ANSWER_INSTRUCTIONS.format(schema=task["answer_schema"].strip()),
-        "--output-format", "stream-json",
-        "--verbose",
+    if task.get("kind") == "edit":
+        prompt = task["prompt"].strip() + EDIT_SUFFIX
+    else:
+        prompt = task["prompt"].strip() + QUESTION_SUFFIX.format(schema=task["answer_schema"].strip())
+    allowed = list(BUILTIN_ALLOWED)
+    if arm != "grep":
+        allowed += [f"mcp__idea__{t}" for t in SEMANTIC_TOOLS]
+    return [
+        CLAUDE_BIN, "-p", prompt,
+        "--output-format", "stream-json", "--verbose",
         "--model", model,
         "--max-budget-usd", str(budget_usd),
         "--no-session-persistence",
-        "--strict-mcp-config",
-        "--mcp-config", str(mcp_config_path),
+        "--strict-mcp-config", "--mcp-config", str(mcp_config_path),
         "--tools", BUILTIN_TOOLS,
         # No user/project settings, hooks or permissions leak into a run.
         "--setting-sources", "",
         "--disable-slash-commands",
         "--permission-mode", "dontAsk",
+        "--allowedTools", ",".join(allowed),
     ]
-    if ARMS[arm].get("system_prompt"):
-        cmd += ["--append-system-prompt", ARMS[arm]["system_prompt"]]
-    allowed = BUILTIN_TOOLS.split(",")
-    if arm != "grep":
-        allowed += [f"mcp__idea__{t}" for t in IDE_READ_TOOLS]
-    cmd += ["--allowedTools", ",".join(allowed)]
-    return cmd
 
 
 def _result_text(block: dict) -> str:
@@ -103,6 +94,7 @@ def summarize(events: list[dict], wall_s: float, exit_code: int) -> dict:
     tool_calls: Counter[str] = Counter()
     ide_ids: set[str] = set()
     ide_ok = ide_failed = 0
+    ide_errors: list[str] = []
     for ev in events:
         message = ev.get("message")
         for block in message.get("content", []) if isinstance(message, dict) else []:
@@ -115,8 +107,10 @@ def summarize(events: list[dict], wall_s: float, exit_code: int) -> dict:
             elif ev.get("type") == "user" and block.get("type") == "tool_result" and block.get("tool_use_id") in ide_ids:
                 # The IDE reports some failures (e.g. "Unable to determine the target
                 # project") as plain text rather than is_error, so check both.
-                if block.get("is_error") or "Unable to determine the target project" in _result_text(block):
+                text = _result_text(block)
+                if block.get("is_error") or "Unable to determine the target project" in text:
                     ide_failed += 1
+                    ide_errors.append(text[:300])
                 else:
                     ide_ok += 1
 
@@ -139,21 +133,24 @@ def summarize(events: list[dict], wall_s: float, exit_code: int) -> dict:
         "ide_tool_calls": sum(n for name, n in tool_calls.items() if name.startswith("mcp__idea__")),
         "ide_calls_ok": ide_ok,
         "ide_calls_failed": ide_failed,
+        "ide_errors": ide_errors,
         "builtin_tool_calls": sum(n for name, n in tool_calls.items() if not name.startswith("mcp__")),
+        "bash_calls": tool_calls.get("Bash", 0),
     }
 
 
 def run_one(task: dict, arm: str, rep: int, out_dir: Path, args) -> dict:
     run_id = f"{task['id']}__{arm}__{rep}"
+    if changed_files(args.project):
+        sys.exit(f"{run_id}: checkout is not clean before the run -- refusing to start")
     mcp_config = out_dir / f"{run_id}.mcp.json"
     mcp_config.write_text(json.dumps(ARMS[arm]["mcp"]))
-    cmd = build_command(task, arm, mcp_config, args.budget_usd, args.model)
+    budget = args.edit_budget_usd if task.get("kind") == "edit" else args.budget_usd
+    cmd = build_command(task, arm, mcp_config, budget, args.model)
 
     print(f"[{datetime.now():%H:%M:%S}] {run_id} ...", flush=True)
     start = time.monotonic()
-    proc = subprocess.run(
-        cmd, cwd=args.project, capture_output=True, text=True, timeout=args.timeout_s
-    )
+    proc = subprocess.run(cmd, cwd=args.project, capture_output=True, text=True, timeout=args.timeout_s)
     wall = time.monotonic() - start
 
     (out_dir / f"{run_id}.jsonl").write_text(proc.stdout)
@@ -165,16 +162,37 @@ def run_one(task: dict, arm: str, rep: int, out_dir: Path, args) -> dict:
             events.append(json.loads(line))
         except json.JSONDecodeError:
             pass
-
     if not any(ev.get("type") == "result" for ev in events):
         # Never got as far as a session (bad flag, missing config, auth): a
         # setup error, not a benchmark result -- stop instead of recording it.
+        reset(args.project)
         sys.exit(f"{run_id}: claude produced no result; stderr:\n{proc.stderr[-2000:]}")
-    summary = {"run_id": run_id, "task": task["id"], "arm": arm, "rep": rep, **summarize(events, wall, proc.returncode)}
+
+    summary = {"run_id": run_id, "task": task["id"], "arm": arm, "rep": rep,
+               "case": task.get("case"), "kind": task.get("kind", "question"),
+               **summarize(events, wall, proc.returncode)}
+
+    touched = changed_files(args.project)
+    summary["files_changed"] = touched
+    if task.get("kind") == "edit":
+        summary["verification"] = verify(args.project, task["verify"])
+        (out_dir / f"{run_id}.diff").write_text(
+            subprocess.run(["git", "-C", str(args.project), "diff"], capture_output=True, text=True).stdout)
+    if touched:
+        reset(args.project)
+        summary["ide_sync_s"] = round(
+            wait_ide_synced([str(PROXY_EXE)], args.project, touched, task.get("sync_probe")), 1)
+
+    # Valid = the IDE never failed when called. Whether it was called at all is
+    # reported separately (ide_used): on grep cases not calling it is right.
+    summary["valid"] = arm == "grep" or summary["ide_calls_failed"] == 0
+    summary["ide_used"] = summary["ide_calls_ok"] > 0
+    verdict = summary.get("verification", {}).get("passed")
     print(
-        f"    cost=${summary['cost_usd']} turns={summary['num_turns']} "
-        f"ide_calls={summary['ide_tool_calls']} (ok={summary['ide_calls_ok']} failed={summary['ide_calls_failed']}) builtin_calls={summary['builtin_tool_calls']} "
-        f"subtype={summary['subtype']}",
+        f"    cost=${summary['cost_usd']:.3f} turns={summary['num_turns']} "
+        f"ide ok/failed={summary['ide_calls_ok']}/{summary['ide_calls_failed']} "
+        f"builtin={summary['builtin_tool_calls']} valid={summary['valid']}"
+        + (f" verified={verdict}" if verdict is not None else ""),
         flush=True,
     )
     return summary
@@ -183,32 +201,37 @@ def run_one(task: dict, arm: str, rep: int, out_dir: Path, args) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tasks", type=Path, default=REPO / "bench" / "tasks.toml")
-    parser.add_argument("--tasks-filter", help="only tasks with this tag")
     parser.add_argument("--task", action="append", help="only these task ids (repeatable)")
     parser.add_argument("--arms", default=",".join(DEFAULT_ARMS), help=f"comma-separated subset of {','.join(ARMS)}")
-    parser.add_argument("--reps", type=int, default=1)
+    parser.add_argument("--reps", type=int, default=3)
     parser.add_argument("--model", default="sonnet")
-    parser.add_argument("--budget-usd", type=float, default=1.0, help="hard cap per run")
-    parser.add_argument("--timeout-s", type=int, default=900)
+    parser.add_argument("--budget-usd", type=float, default=1.0, help="hard cap per question run")
+    parser.add_argument("--edit-budget-usd", type=float, default=2.0, help="hard cap per edit run")
+    parser.add_argument("--timeout-s", type=int, default=1200)
     parser.add_argument("--out", type=Path, help="results dir (default: bench/results/<timestamp>)")
     args = parser.parse_args()
 
     spec = tomllib.loads(args.tasks.read_text())
     args.project = Path(spec["project"]["path"]).expanduser()
     tasks = spec["tasks"]
-    if args.tasks_filter:
-        tasks = [t for t in tasks if args.tasks_filter in t.get("tags", [])]
     if args.task:
         tasks = [t for t in tasks if t["id"] in args.task]
     arms = args.arms.split(",")
     if not tasks or any(a not in ARMS for a in arms):
         sys.exit("no tasks selected, or unknown arm")
 
+    try:
+        for line in preflight({a: ARMS[a] for a in arms}, args.project, tasks, spec["project"].get("ide_health_files", [])):
+            print("preflight ok:", line, flush=True)
+    except PreflightError as exc:
+        sys.exit(f"PREFLIGHT FAILED -- nothing was run: {exc}")
+
     # Absolute: runs execute with the target project as cwd.
     out_dir = (args.out or REPO / "bench" / "results" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {"model": args.model, "project": spec["project"], "arms": arms, "reps": args.reps,
-            "budget_usd": args.budget_usd, "started": datetime.now(timezone.utc).isoformat()}
+            "budget_usd": args.budget_usd, "edit_budget_usd": args.edit_budget_usd,
+            "tasks": [t["id"] for t in tasks], "started": datetime.now(timezone.utc).isoformat()}
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
     summaries = []

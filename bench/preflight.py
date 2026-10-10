@@ -77,14 +77,17 @@ def check_task(task: dict, text: str) -> list[str]:
     return problems
 
 
-async def _check_arm(arm: str, server: dict, project: Path, tasks: list[dict]) -> list[str]:
+async def _check_arm(arm: str, server: dict, project: Path, tasks: list[dict], health_files: list[str]) -> list[str]:
     log = []
 
     async def run(session: ClientSession) -> None:
         await session.initialize()
         names = {t.name for t in (await session.list_tools()).tools}
-        if "analyze_calls" not in names:
-            raise PreflightError(f"{arm}: analyze_calls not exposed (tools: {sorted(names)})")
+        needed = {"analyze_calls"} | (
+            {"rename_refactoring", "build_project", "get_file_problems"}
+            if any(t.get("kind") == "edit" for t in tasks) else set())
+        if needed - names:
+            raise PreflightError(f"{arm}: IDE tools not exposed: {sorted(needed - names)} (have: {sorted(names)})")
 
         # No projectPath: the proxy must resolve the project on its own, exactly
         # as it has to for the agent.
@@ -95,10 +98,25 @@ async def _check_arm(arm: str, server: dict, project: Path, tasks: list[dict]) -
             raise PreflightError(f"{arm}: IDE did not identify the project: {text[:300]}")
         log.append(f"{arm}: project identified -> {text.strip()[:120]}")
 
+        # The IDE must have the project fully configured (e.g. imported as a Maven
+        # project, test dependencies resolved): these files compile cleanly, so
+        # the IDE must report no errors in them. Otherwise its compile checks
+        # would report false errors to the agent.
+        for f in health_files:
+            res = await session.call_tool("get_file_problems", {"filePath": f, "errorsOnly": True})
+            problems = _text(res)
+            if res.is_error or '"errors":[]' not in problems.replace(" ", ""):
+                raise PreflightError(
+                    f"{arm}: IntelliJ reports errors in {f}, which compiles fine with Maven -- "
+                    f"the IDE project isn't fully set up (Maven import / dependencies?): {problems[:300]}")
+        if health_files:
+            log.append(f"{arm}: IDE reports no errors in {len(health_files)} known-good files")
+
         for task in tasks:
             check = task.get("ide_check")
             if not check:
-                log.append(f"{arm}: {task['id']}: skipped (IDE can't answer this task)")
+                why = "edit task, verified by compile/tests" if task.get("kind") == "edit" else "grep case"
+                log.append(f"{arm}: {task['id']}: no IDE answer check ({why})")
                 continue
             res = await session.call_tool(check["tool"], {**base, **check["args"]})
             text = _text(res)
@@ -120,14 +138,42 @@ async def _check_arm(arm: str, server: dict, project: Path, tasks: list[dict]) -
     return log
 
 
-def preflight(arms: dict[str, dict], project: Path, tasks: list[dict]) -> list[str]:
+def _check_checkout(project: Path, tasks: list[dict]) -> list[str]:
+    from workspace import changed_files, maven, verify  # noqa: PLC0415
+
+    if changed_files(project):
+        raise PreflightError(f"checkout {project} is not clean: {changed_files(project)[:5]}")
+    ok, out = maven(project, "-DskipTests", "test-compile")
+    if not ok:
+        raise PreflightError(f"the untouched checkout does not compile:\n{out[-1000:]}")
+    log = ["checkout clean, main and test sources compile"]
+    for task in tasks:
+        if task.get("kind") != "edit":
+            continue
+        # The declaration checks must fail on the untouched code, or a run that
+        # does nothing would pass.
+        untouched = verify(project, {k: v for k, v in task["verify"].items() if k in ("contains", "lacks")})
+        if untouched["passed"]:
+            raise PreflightError(f"{task['id']}: verification already passes on the untouched checkout")
+        log.append(f"{task['id']}: verification fails on untouched code, as it must")
+    return log
+
+
+def preflight(arms: dict[str, dict], project: Path, tasks: list[dict], health_files: list[str] = ()) -> list[str]:
     """Raises PreflightError on the first failed check; returns a log of passed ones."""
-    log = []
+    log = _check_checkout(project, tasks)
     for arm, spec in arms.items():
         server = spec["mcp"]["mcpServers"].get("idea")
         if server is None:
             continue
-        log += anyio.run(_check_arm, arm, server, project, tasks)
+        try:
+            log += anyio.run(_check_arm, arm, server, project, tasks, list(health_files))
+        except BaseExceptionGroup as group:
+            # Raised inside the MCP client's task group; surface our own error.
+            leaf = group
+            while isinstance(leaf, BaseExceptionGroup):
+                leaf = leaf.exceptions[0]
+            raise leaf from None
     return log
 
 
@@ -138,7 +184,7 @@ def main() -> None:
     spec = tomllib.loads((REPO / "bench" / "tasks.toml").read_text())
     project = Path(spec["project"]["path"]).expanduser()
     try:
-        for line in preflight({a: ARMS[a] for a in DEFAULT_ARMS}, project, spec["tasks"]):
+        for line in preflight({a: ARMS[a] for a in DEFAULT_ARMS}, project, spec["tasks"], spec["project"].get("ide_health_files", [])):
             print("ok  ", line)
     except PreflightError as exc:
         sys.exit(f"PREFLIGHT FAILED: {exc}")
