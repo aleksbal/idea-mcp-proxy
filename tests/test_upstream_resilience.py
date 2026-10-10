@@ -17,7 +17,7 @@ from mcp.client.stdio import stdio_client
 async def _with_proxy(upstream_url: str, body) -> None:
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "idea_mcp_proxy.server", "--upstream", upstream_url],
+        args=["-m", "idea_mcp_proxy.server", "--upstream", upstream_url, "--include-tools", "*"],
     )
     with anyio.fail_after(60):
         async with stdio_client(params) as (read, write):
