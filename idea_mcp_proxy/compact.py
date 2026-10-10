@@ -18,47 +18,67 @@ import mcp.types as types
 # in itself (see compact_tool's hide_project_path).
 HIDDEN_PARAMS = frozenset({"timeout"})
 
-GREP_HINT = "For plain text, file names or string literals, use Grep/Glob instead."
-
+# When-to-use rules, agreed per task type. Each IDE tool's description starts
+# with the tasks it should be used for *instead of* the built-in tools; the
+# server instructions (ROUTING_INSTRUCTIONS) repeat the whole table once.
 DESCRIPTIONS: dict[str, str] = {
-    "analyze_calls": (
-        "Who calls a method (INCOMING_CALLS) or what it calls (OUTGOING_CALLS), resolved "
-        "by the IDE: the exact overload, calls through overrides and interfaces, no text "
-        "false positives, many levels deep in one call. Use instead of grep for any "
-        "call-graph question (callers, impact of a change, unused code). "
-        "symbolFqn: fully qualified, e.g. `com.x.Foo.bar`, or `com.x.Foo.bar(String, int)` "
-        "for one overload; an ambiguous name returns the exact signatures to pick from."
+    "rename_refactoring": (
+        "Use for EVERY rename of a class, method, field, parameter or variable, instead of "
+        "Edit/sed. The IDE updates all references project-wide and gets overloads, "
+        "overrides, imports and same-named symbols right; text replacement doesn't."
     ),
-    "search_symbol": (
-        "Find classes, methods or fields by name in the IDE index; returns their file "
-        "locations. Use to locate a declaration, then analyze_calls for its callers. "
-        + GREP_HINT
-    ),
-    "get_symbol_info": (
-        "The declaration, signature, type and documentation of the symbol at "
-        "file:line:column (IntelliJ Quick Documentation). Use when the type isn't "
-        "visible in the text: `var`, lambdas, generics, inherited or overloaded members."
+    "build_project": (
+        "Use ALWAYS after changing a signature, renaming, or moving code, to check that the "
+        "whole project still compiles. Returns the compilation errors. Pass `filesToRebuild` "
+        "to compile only some files."
     ),
     "get_file_problems": (
-        "Compile errors and inspection warnings for one file, from the IDE, without "
-        "running a build. Use right after editing a file to check the edit."
+        "Use right after editing a file: its compile errors and warnings from the IDE, "
+        "without running a build."
     ),
-    "lint_files": "Like get_file_problems, for several files in one call.",
-    "build_project": (
-        "Compile the project (or only `filesToRebuild`) in the IDE and return the "
-        "compilation errors. Use after edits that may break other files, e.g. a "
-        "changed signature."
+    "lint_files": "Like get_file_problems, for several edited files in one call.",
+    "analyze_calls": (
+        "Use ALWAYS for who-calls-what questions (callers, impact of a change, is it unused), "
+        "instead of grepping for the name. The IDE resolves the exact overload, calls "
+        "through interfaces and overrides, and indirect callers many levels deep in one call. "
+        "INCOMING_CALLS = callers, OUTGOING_CALLS = callees. symbolFqn: fully qualified, "
+        "e.g. `com.x.Foo.bar`, or `com.x.Foo.bar(String, int)` for one overload; an "
+        "ambiguous name returns the exact signatures to pick from."
     ),
-    "rename_refactoring": (
-        "Rename a class, method, field or variable and update every reference in the "
-        "project, resolved by the IDE (overloads, overrides, imports), not by text "
-        "replacement. Use for any rename of a code symbol instead of Edit or sed."
+    "get_symbol_info": (
+        "Use when you need the type, signature or declaration of something at "
+        "file:line:column and the text doesn't show it: `var`, lambdas, generics, inherited "
+        "or overloaded members. Returns IntelliJ's Quick Documentation."
+    ),
+    "search_symbol": (
+        "Use to find where a class, method or field is declared, instead of Grep/Glob: "
+        "returns declarations only, no text matches. For text, log messages, string "
+        "literals or config keys, use Grep."
+    ),
+    "get_project_modules": (
+        "Use for the project's module structure, instead of reading build files."
+    ),
+    "get_project_dependencies": (
+        "Use for the libraries the project depends on, instead of reading pom.xml/"
+        "build.gradle: resolved by the IDE, including parent POMs and BOMs."
     ),
     "reformat_file": "Apply the project's code style to the given files.",
-    "get_project_modules": "The project's modules and their types.",
-    "get_project_dependencies": "The libraries the project depends on, across all modules.",
-    "get_project_status": "Whether the IDE is still indexing; check before heavy analysis if calls time out.",
+    "get_project_status": "Whether the IDE is still indexing; check if IDE calls time out.",
 }
+
+ROUTING_INSTRUCTIONS = """\
+IntelliJ IDEA for this project, through idea-mcp-proxy. Use the IDE where text \
+search can't be exact, and the built-in tools for everything else:
+- Rename a code symbol: rename_refactoring (never Edit/sed).
+- After a signature change, rename or move: build_project, always.
+- After editing a file: get_file_problems (or lint_files for several).
+- Who calls / impact / unused: analyze_calls, always (not Grep).
+- Type or signature not visible in the text: get_symbol_info.
+- Where is a class/method declared: search_symbol.
+- Modules / dependencies: get_project_modules / get_project_dependencies.
+- Text, log messages, string literals, config keys, comments: Grep. Files by name: \
+Glob. Reading files: Read. Other edits: Edit.
+"""
 
 # Shorter parameter descriptions where the IDE's are long; others are cut to
 # their first sentence.

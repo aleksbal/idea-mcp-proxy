@@ -188,6 +188,25 @@ idea-mcp-proxy --descriptions original                    # the IDE's own texts
 Also settable as `IDEA_MCP_INCLUDE_TOOLS` / `IDEA_MCP_EXCLUDE_TOOLS` /
 `IDEA_MCP_DESCRIPTIONS`.
 
+### Routing rules: when the agent should use the IDE instead of grep
+
+Decided per task type, and stated to the agent twice: each IDE tool's
+description starts with when to use it, and the whole table is sent as the
+MCP server instructions, which Claude Code puts into the agent's system
+prompt (`idea_mcp_proxy/compact.py`).
+
+| task | use | instead of |
+|---|---|---|
+| rename a class/method/field/variable | `rename_refactoring` | Edit / sed |
+| after a signature change, rename or move | `build_project`, always | nothing / running the build |
+| after editing a file | `get_file_problems` / `lint_files` | nothing / a full build |
+| who calls a method, impact of a change, unused code | `analyze_calls`, always | Grep for the name |
+| type/signature not visible in the text (`var`, lambdas, generics, inherited) | `get_symbol_info` | Read + guessing |
+| where is a class/method declared | `search_symbol` | Grep / Glob |
+| modules, dependencies | `get_project_modules` / `get_project_dependencies` | reading build files |
+| text, log messages, string literals, config keys, comments | **Grep** | |
+| files by name / reading files / other edits | **Glob / Read / Edit** | |
+
 ### Default `projectPath`
 
 Every IDE tool takes an optional `projectPath`. With **more than one project

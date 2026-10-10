@@ -65,3 +65,26 @@ def test_invalid_descriptions_env_value_fails_at_startup(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         main([])
     assert exc.value.code == 2
+
+
+def test_routing_rules_are_sent_as_server_instructions(fake_ide):
+    import sys
+
+    import anyio
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    from idea_mcp_proxy.compact import ROUTING_INSTRUCTIONS
+
+    fake_ide.start()
+
+    async def scenario():
+        params = StdioServerParameters(command=sys.executable, args=["-m", "idea_mcp_proxy.server", "--upstream", fake_ide.url])
+        with anyio.fail_after(30):
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    init = await session.initialize()
+                    assert init.instructions == ROUTING_INSTRUCTIONS
+                    assert "rename_refactoring" in init.instructions
+
+    anyio.run(scenario)
