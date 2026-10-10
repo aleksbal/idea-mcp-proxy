@@ -264,6 +264,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--port", type=int, default=PROXY_PORT, help="http transport only")
     args = parser.parse_args(argv)
+    # argparse doesn't validate defaults, and this one can come from the environment.
+    if args.descriptions not in ("compact", "original"):
+        parser.error(f"invalid --descriptions / IDEA_MCP_DESCRIPTIONS value {args.descriptions!r}: use compact or original")
 
     # stderr only: in stdio mode stdout is the MCP protocol channel.
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)

@@ -50,3 +50,18 @@ def test_first_sentence_does_not_stop_at_abbreviations():
     from idea_mcp_proxy.compact import _first_sentence
 
     assert _first_sentence("Filters files, e.g. ['a']. Applied locally.") == "Filters files, e.g. ['a']."
+
+
+def test_compact_keeps_other_protocol_fields():
+    t = _tool().model_copy(update={"annotations": types.ToolAnnotations(read_only_hint=True)})
+    assert compact_tool(t, hide_project_path=True).annotations.read_only_hint is True
+
+
+def test_invalid_descriptions_env_value_fails_at_startup(monkeypatch):
+    import pytest
+    from idea_mcp_proxy.server import main
+
+    monkeypatch.setenv("IDEA_MCP_DESCRIPTIONS", "compactt")
+    with pytest.raises(SystemExit) as exc:
+        main([])
+    assert exc.value.code == 2

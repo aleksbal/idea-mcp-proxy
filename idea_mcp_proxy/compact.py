@@ -102,10 +102,10 @@ def compact_tool(t: types.Tool, hide_project_path: bool) -> types.Tool:
     schema["properties"] = props
     if "required" in schema:
         schema["required"] = [r for r in schema["required"] if r not in hidden]
-    return types.Tool(
-        name=t.name,
-        title=t.title,
-        description=DESCRIPTIONS.get(t.name) or _first_sentence(t.description or ""),
-        input_schema=schema,
-        output_schema=t.output_schema,
+    # model_copy keeps every other protocol field (annotations, _meta, icons, ...).
+    return t.model_copy(
+        update={
+            "description": DESCRIPTIONS.get(t.name) or _first_sentence(t.description or ""),
+            "input_schema": schema,
+        }
     )
