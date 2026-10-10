@@ -22,6 +22,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+from idea_mcp_proxy.tool_filter import CODE_READ_TOOLS  # noqa: E402
+
 PROXY_EXE = REPO / ".venv" / "bin" / "idea-mcp-proxy"
 RAW_IDE_URL = "http://127.0.0.1:64342/stream"
 # The Claude Code CLI to run; must be logged in (`claude` -> /login).
@@ -29,32 +32,36 @@ CLAUDE_BIN = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
 
 BUILTIN_TOOLS = "Read,Grep,Glob"
 
-# IDE tools that only read. Everything else the IDE exposes (terminal, run
-# configurations, debugger, databases, notebooks, file edits) is denied so
-# no arm can do more than look at the code.
-IDE_READ_TOOLS = [
-    "analyze_calls",
-    "search_symbol",
-    "search_text",
-    "search_regex",
-    "search_file",
-    "get_symbol_info",
-    "read_file",
-    "list_directory_tree",
-    "get_file_problems",
-    "get_project_modules",
-    "get_project_dependencies",
-]
+# IDE tools that only read (the proxy's @code-read preset). Only these are
+# auto-approved in every IDE arm, so no arm can do more than look at the
+# code; anything else is denied by --permission-mode dontAsk.
+IDE_READ_TOOLS = list(CODE_READ_TOOLS)
+
+STEERING_PROMPT = (
+    "This project is open in IntelliJ IDEA, available through the `idea` MCP tools. "
+    "For questions about code structure -- who calls what, overloads, overrides, "
+    "implementations, symbol definitions -- prefer the semantic IDE tools "
+    "(analyze_calls, search_symbol, get_symbol_info) over Grep: they resolve real "
+    "types and calls instead of matching text."
+)
 
 ARMS = {
     # Claude Code's built-in tools only: the "grep everything" baseline.
-    "grep": {"mcpServers": {}},
-    # Built-ins plus the IDE tools through this proxy.
-    "ide-proxy": {"mcpServers": {"idea": {"type": "stdio", "command": str(PROXY_EXE)}}},
-    # Built-ins plus the IDE tools straight from IntelliJ, no proxy. Same
-    # server name, so tool names are identical and only the proxy differs.
-    "ide-raw": {"mcpServers": {"idea": {"type": "http", "url": RAW_IDE_URL}}},
+    "grep": {"mcp": {"mcpServers": {}}},
+    # Built-ins plus every IDE tool straight from IntelliJ (62 in 2026.2), no proxy.
+    "ide-raw": {"mcp": {"mcpServers": {"idea": {"type": "http", "url": RAW_IDE_URL}}}},
+    # Built-ins plus only the read-only code tools, through this proxy (filtered
+    # tool list + trimmed analyze_calls). Same server name as ide-raw, so tool
+    # names are identical and only the proxy differs.
+    "ide-proxy": {"mcp": {"mcpServers": {"idea": {
+        "type": "stdio", "command": str(PROXY_EXE), "args": ["--include-tools", "@code-read"]}}}},
+    # ide-proxy plus an instruction to prefer the IDE tools. Not in the default
+    # set: run it only if ide-proxy alone doesn't get the IDE tools used.
+    "ide-proxy-steered": {"mcp": {"mcpServers": {"idea": {
+        "type": "stdio", "command": str(PROXY_EXE), "args": ["--include-tools", "@code-read"]}}},
+        "system_prompt": STEERING_PROMPT},
 }
+DEFAULT_ARMS = ("grep", "ide-raw", "ide-proxy")
 
 ANSWER_INSTRUCTIONS = (
     "\n\nWork only by reading and searching; do not modify any files. "
@@ -81,6 +88,8 @@ def build_command(task: dict, arm: str, mcp_config_path: Path, budget_usd: float
         "--disable-slash-commands",
         "--permission-mode", "dontAsk",
     ]
+    if ARMS[arm].get("system_prompt"):
+        cmd += ["--append-system-prompt", ARMS[arm]["system_prompt"]]
     allowed = BUILTIN_TOOLS.split(",")
     if arm != "grep":
         allowed += [f"mcp__idea__{t}" for t in IDE_READ_TOOLS]
@@ -121,7 +130,7 @@ def summarize(events: list[dict], wall_s: float, exit_code: int) -> dict:
 def run_one(task: dict, arm: str, rep: int, out_dir: Path, args) -> dict:
     run_id = f"{task['id']}__{arm}__{rep}"
     mcp_config = out_dir / f"{run_id}.mcp.json"
-    mcp_config.write_text(json.dumps(ARMS[arm]))
+    mcp_config.write_text(json.dumps(ARMS[arm]["mcp"]))
     cmd = build_command(task, arm, mcp_config, args.budget_usd, args.model)
 
     print(f"[{datetime.now():%H:%M:%S}] {run_id} ...", flush=True)
@@ -160,7 +169,7 @@ def main() -> None:
     parser.add_argument("--tasks", type=Path, default=REPO / "bench" / "tasks.toml")
     parser.add_argument("--tasks-filter", help="only tasks with this tag")
     parser.add_argument("--task", action="append", help="only these task ids (repeatable)")
-    parser.add_argument("--arms", default=",".join(ARMS), help=f"comma-separated subset of {','.join(ARMS)}")
+    parser.add_argument("--arms", default=",".join(DEFAULT_ARMS), help=f"comma-separated subset of {','.join(ARMS)}")
     parser.add_argument("--reps", type=int, default=1)
     parser.add_argument("--model", default="sonnet")
     parser.add_argument("--budget-usd", type=float, default=1.0, help="hard cap per run")

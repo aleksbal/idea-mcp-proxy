@@ -29,3 +29,14 @@ def test_empty_expected_set_is_correct_only_when_answer_empty():
     assert report.score(task, {"production_callers": [], "test_classes": ["ObjectUtilsTest"]})["exact"]
     assert not report.score(task, {"production_callers": ["Range.min"], "test_classes": ["ObjectUtilsTest"]})["exact"]
     assert not report.score(task, None)["exact"]
+
+
+def test_alternative_spellings_and_class_normalization():
+    task = {"scoring": "set", "answer_key": "callers",
+            "expected": ["EventBindingInvocationHandler.invoke|EventUtils.invoke", "MethodUtils.invokeMethod"]}
+    assert report.score(task, {"callers": ["EventUtils.invoke", "MethodUtils.invokeMethod"]})["exact"]
+    assert report.score(task, {"callers": ["EventUtils.EventBindingInvocationHandler.invoke", "MethodUtils.invokeMethod"]})["exact"]
+    classes = {"scoring": "set", "answer_key": "classes", "normalize": "class",
+               "expected": ["JsonToStringStyle", "AnnotationUtils"]}
+    sc = report.score(classes, {"classes": ["ToStringStyle.JsonToStringStyle", "AnnotationUtils (anonymous ToStringStyle)"]})
+    assert sc["exact"], sc

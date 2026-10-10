@@ -71,3 +71,131 @@ all in testMin). Confirmed with IntelliJ's INCOMING_CALLS hierarchy.
 grep has to rule all of them out. No static imports of ObjectUtils, no
 subclasses, no unqualified min( inside ObjectUtils.
 """
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "transitive-callers"
+tags = ["navigation", "transitive"]
+prompt = """
+Which methods in this project's production code (src/main/java) call
+`org.apache.commons.lang3.reflect.MemberUtils.isMatchingMethod(Method, Class<?>[])`
+directly OR indirectly, through any chain of calls of any length? Only follow
+calls inside this project's src/main/java (ignore the JDK and libraries).
+Report each method once by name, even if it has several overloads in the chain.
+"""
+answer_schema = """
+{"callers": ["SimpleClassName.methodName", ...]}
+"""
+scoring = "set"
+answer_key = "callers"
+expected = [
+  "MethodUtils.getMatchingAccessibleMethod",
+  "MethodUtils.getInvokeMethod",
+  "MethodUtils.getOverrideHierarchy",
+  "MethodUtils.invokeMethod",
+  "MethodUtils.invokeStaticMethod",
+  "EventUtils.addEventListener",
+  "EventUtils.bindEventsToMethod",
+  "EventBindingInvocationHandler.invoke|EventUtils.invoke",
+]
+notes = """
+From IntelliJ's INCOMING_CALLS hierarchy at depth 12 (closes at depth 7),
+first three levels re-checked with grep. 14 project methods, 8 distinct names:
+invokeMethod appears as 6 overloads, invokeStaticMethod as 2. The chain leaves
+MethodUtils into EventUtils, and through EventBindingInvocationHandler.invoke
+(an InvocationHandler, nested in EventUtils) further into JDK annotation code,
+which is excluded by the question.
+"""
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "override-overload"
+tags = ["navigation", "overloads", "inheritance"]
+prompt = """
+Which production classes (src/main/java) override the method
+`org.apache.commons.lang3.builder.ToStringStyle.appendDetail(StringBuffer, String, Object)`
+-- exactly this overload with an `Object` value parameter, not the overloads for
+arrays, collections, maps or primitives? Include nested and anonymous classes;
+for an anonymous class, give the name of the class it is declared in.
+"""
+answer_schema = """
+{"overriding_classes": ["SimpleClassName", ...]}
+"""
+scoring = "set"
+answer_key = "overriding_classes"
+normalize = "class"
+expected = [
+  "JsonToStringStyle",
+  "RecursiveToStringStyle",
+  "MultilineRecursiveToStringStyle",
+  "AnnotationUtils",
+]
+notes = """
+appendDetail has 26 overloads in ToStringStyle. Overriders of the Object one:
+the nested ToStringStyle.JsonToStringStyle, RecursiveToStringStyle,
+MultilineRecursiveToStringStyle, and the anonymous ToStringStyle in the
+AnnotationUtils.TO_STRING_STYLE field. Traps: AnnotationUtils declares the
+parameter as `Object value` without `final`, so a grep for the exact signature
+misses it; MultilineRecursiveToStringStyle overrides 10 other overloads in the
+same file; RecursiveToStringStyle also overrides the Collection overload;
+StandardToStringStyle and the other nested styles don't override it.
+"""
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "impact-signature"
+tags = ["navigation", "overloads", "impact"]
+prompt = """
+I want to change the signature of `org.apache.commons.lang3.StringUtils.repeat(char, int)`
+(the char overload only). Which production methods (src/main/java) call exactly
+this overload and would therefore have to be updated? Calls to
+`repeat(String, int)` or `repeat(String, String, int)` don't count.
+"""
+answer_schema = """
+{"callers": ["SimpleClassName.methodName", ...]}
+"""
+scoring = "set"
+answer_key = "callers"
+expected = [
+  "StringUtils.leftPad",
+  "StringUtils.rightPad",
+  "StringUtils.repeat",
+  "FormattableUtils.append",
+  "MultilineRecursiveToStringStyle.spacer",
+]
+notes = """
+Matches IntelliJ's INCOMING_CALLS for repeat(char, int) exactly; argument types
+checked at every site. StringUtils.repeat here is repeat(String, int), which
+calls repeat(repeat.charAt(0), count) twice -- the parameter is itself named
+`repeat`. Traps: ClassUtils passes "[]" and a String "[" variable,
+DurationFormatUtils a String, repeat(String, String, int) calls the String
+overload; leftPad/rightPad have char and String overloads, only the char ones
+call it.
+"""
+
+# --------------------------------------------------------------------------
+[[tasks]]
+id = "large-fanout"
+tags = ["navigation", "fanout"]
+prompt = """
+Which production classes (src/main/java), other than StringUtils itself, call
+`org.apache.commons.lang3.StringUtils.isEmpty(CharSequence)`?
+"""
+answer_schema = """
+{"classes": ["SimpleClassName", ...]}
+"""
+scoring = "set"
+answer_key = "classes"
+normalize = "class"
+expected = [
+  "CharSetUtils", "CharUtils", "ClassUtils", "DurationUtils", "NumberUtils",
+  "StrBuilder", "StrMatcher", "StrSubstitutor", "StrTokenizer", "Strings",
+  "SystemProperties", "SystemUtils", "WordUtils",
+]
+notes = """
+84 production call sites (94 including tests) in 14 classes; 13 excluding
+StringUtils. IntelliJ's INCOMING_CALLS and a grep for `StringUtils.isEmpty(`
+agree exactly -- this task measures cost on a wide fan-out, not grep
+correctness traps. Note `isEmpty` is also a method name in ArrayUtils,
+ObjectUtils, CharSetUtils (private), StrBuilder and others.
+"""

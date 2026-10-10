@@ -28,16 +28,27 @@ def extract_answer(text: str) -> dict | None:
         return None
 
 
-def normalize(name: str) -> str:
-    """`org.x.Strings#endsWithAny(CharSequence, ...)` -> `strings.endswithany`."""
-    name = re.sub(r"\(.*", "", str(name)).replace("#", ".").strip()
-    parts = [p for p in name.split(".") if p]
-    return ".".join(parts[-2:]).lower() if parts else ""
+def normalize(name: str, kind: str = "method") -> str:
+    """`org.x.Strings#endsWithAny(CharSequence, ...)` -> `strings.endswithany`.
+
+    kind="class" keeps only the simple class name: `ToStringStyle.JsonToStringStyle`
+    and `JsonToStringStyle` both become `jsontostringstyle`.
+    """
+    name = re.sub(r"\(.*", "", str(name)).replace("#", ".").replace("$", ".").strip()
+    parts = [p.strip() for p in name.split(".") if p.strip()]
+    keep = 1 if kind == "class" else 2
+    return ".".join(parts[-keep:]).lower() if parts else ""
 
 
-def score_set(got: list, expected: list) -> dict:
-    got_n = {normalize(g) for g in got or []}
-    exp_n = {normalize(e) for e in expected}
+def score_set(got: list, expected: list, kind: str = "method") -> dict:
+    got_n = {normalize(g, kind) for g in got or []}
+    # An expected entry may list accepted spellings: "EventBindingInvocationHandler.invoke|EventUtils.invoke".
+    # A match on any spelling counts as that entry.
+    alternatives = [{normalize(a, kind) for a in str(e).split("|")} for e in expected]
+    exp_n = set()
+    for alts in alternatives:
+        hit = alts & got_n
+        exp_n.add(next(iter(hit)) if hit else sorted(alts)[0])
     tp = len(got_n & exp_n)
     precision = tp / len(got_n) if got_n else (1.0 if not exp_n else 0.0)
     recall = tp / len(exp_n) if exp_n else (1.0 if not got_n else 0.0)
@@ -54,9 +65,10 @@ def score(task: dict, answer: dict | None) -> dict:
     if answer is None:
         return {"exact": False, "precision": 0.0, "recall": 0.0, "missing": ["<no parseable answer>"], "extra": []}
     if task["scoring"] == "set":
-        return score_set(answer.get(task["answer_key"], []), task["expected"])
+        return score_set(answer.get(task["answer_key"], []), task["expected"], task.get("normalize", "method"))
     if task["scoring"] == "multi_set":
-        parts = {k: score_set(answer.get(k, []), v) for k, v in task["expected_sets"].items()}
+        kind = task.get("normalize", "method")
+        parts = {k: score_set(answer.get(k, []), v, kind) for k, v in task["expected_sets"].items()}
         return {
             "exact": all(p["exact"] for p in parts.values()),
             "precision": statistics.mean(p["precision"] for p in parts.values()),
