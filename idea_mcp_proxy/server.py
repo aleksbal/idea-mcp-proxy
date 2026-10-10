@@ -34,6 +34,7 @@ from .tool_filter import (
     UnknownPreset,
     parse_patterns,
 )
+from .compact import compact_tool
 from .tool_descriptions import DISAMBIGUATION_NOTES, with_disambiguation_note
 from .upstream import (
     DEFAULT_UPSTREAM_URL,
@@ -87,6 +88,7 @@ def build_server(
     upstream_url: str = DEFAULT_UPSTREAM_URL,
     tool_filter: ToolFilter | None = None,
     project_path: str | None = None,
+    compact: bool = True,
 ) -> Server:
     tool_filter = tool_filter or ToolFilter.from_patterns(DEFAULT_INCLUDE)
     # Tools whose schema accepts projectPath, learned from the upstream tool list.
@@ -140,10 +142,14 @@ def build_server(
             raise MCPError(types.INTERNAL_ERROR, str(exc)) from exc
         learn(upstream, result.tools)
         tools = [
-            build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else _annotate_tool(t)
+            build_wrapped_tool(t) if t.name == WRAPPED_TOOL_NAME else t
             for t in result.tools
             if tool_filter.allows(t.name)
         ]
+        if compact:
+            tools = [compact_tool(t, hide_project_path=bool(project_path)) for t in tools]
+        else:
+            tools = [_annotate_tool(t) for t in tools]
         return types.ListToolsResult(tools=tools)
 
     async def on_call_tool(
@@ -242,6 +248,15 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--descriptions",
+        choices=["compact", "original"],
+        default=os.environ.get("IDEA_MCP_DESCRIPTIONS", "compact"),
+        help=(
+            "compact (default): short tool descriptions saying when to use the IDE and "
+            "when Grep is enough, trimmed schemas; original: the IDE's own texts"
+        ),
+    )
+    parser.add_argument(
         "--host",
         default=PROXY_HOST,
         choices=sorted(LOOPBACK_HOSTS),
@@ -262,7 +277,9 @@ def main(argv: list[str] | None = None) -> None:
     if project_path is None and args.transport == "stdio":
         project_path = os.getcwd()
     logger.info("default projectPath: %s", project_path or "(none)")
-    server = build_server(args.upstream, tool_filter, project_path or None)
+    server = build_server(
+        args.upstream, tool_filter, project_path or None, compact=args.descriptions == "compact"
+    )
     if args.transport == "stdio":
         anyio.run(_run_stdio, server)
     else:

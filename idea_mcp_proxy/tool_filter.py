@@ -51,12 +51,34 @@ CODE_TOOLS = CODE_READ_TOOLS + (
     "git_status",
 )
 
+# Only what the agent's own Grep/Glob/Read/Edit can't do: call hierarchy,
+# symbol lookup, types and docs at a position, compile errors without a build,
+# refactoring. IDE text search, file reading, file listing and patching
+# duplicate the built-ins and only compete with them, so they're left out.
+SEMANTIC_READ_TOOLS = (
+    "analyze_calls",
+    "search_symbol",
+    "get_symbol_info",
+    "get_file_problems",
+    "lint_files",
+    "get_project_modules",
+    "get_project_dependencies",
+    "get_project_status",
+)
+SEMANTIC_TOOLS = SEMANTIC_READ_TOOLS + (
+    "build_project",
+    "rename_refactoring",
+    "reformat_file",
+)
+
 PRESETS: dict[str, tuple[str, ...]] = {
+    "semantic": SEMANTIC_TOOLS,
+    "semantic-read": SEMANTIC_READ_TOOLS,
     "code": CODE_TOOLS,
     "code-read": CODE_READ_TOOLS,
 }
 
-DEFAULT_INCLUDE = ("@code",)
+DEFAULT_INCLUDE = ("@semantic",)
 
 
 class UnknownPreset(ValueError):

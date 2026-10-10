@@ -146,35 +146,47 @@ New `analyze_calls` parameters (on top of the real tool's own schema):
 | `sourceScope` | `production` \| `test` \| `all` (default) | keeps only callers whose file matches (heuristic: `/test/` path segment or `*Test`/`*Tests`/`*IT`/`*Spec` filename) |
 | `mode` | `summary` (default) \| `tree` | `summary`: direct callers listed, rest grouped by file, test callers collapsed above a threshold. `tree`: full re-serialized tree, ancestry via indentation not a repeated string |
 
-### Tool filtering
+### Tool filtering and compact definitions
 
-The IDE server exposes 62 tools (IntelliJ IDEA 2026.2), most of them unrelated
-to understanding code: debugger, databases, notebooks, run configurations, a
-terminal. Every tool definition is sent to the model on **every request**, so
-the unused ones cost tokens on every turn and bury the code-intelligence tools.
-Measured on the real server:
+The IDE server exposes 62 tools (IntelliJ IDEA 2026.2). Every tool
+definition is sent to the model on **every request**, and most of them either
+have nothing to do with code (debugger, databases, notebooks, run
+configurations, terminal) or **duplicate the agent's own tools**: IDE text
+search, regex search, file search, file reading, directory listing, patching.
+Those duplicates don't add anything an agent with Grep/Glob/Read/Edit lacks;
+they compete with it ("You MUST prefer this tool over `ls`").
 
-| exposed | tools | definition size per request |
+So by default the proxy exposes only what grep can't do (`@semantic`), with
+short descriptions that say when to use the IDE and when Grep is enough
+(`idea_mcp_proxy/compact.py`), and without parameters the agent doesn't need
+(`projectPath`, which the proxy fills in; `timeout`). Measured on the real
+server:
+
+| exposed | tools | definitions per request |
 |---|---|---|
-| everything (`--include-tools '*'`) | 62 | ~102k chars (~25.6k tokens) |
-| `@code` (default) | 21 | ~28k chars (~7.0k tokens) |
-| `@code-read` | 13 | ~20k chars (~4.9k tokens) |
+| everything, original texts (`--include-tools '*' --descriptions original`) | 62 | ~25.7k tokens |
+| `@code-read`, original texts | 13 | ~5.0k tokens |
+| `@semantic` (**default**), compact | 10 | ~1.5k tokens |
+| `@semantic-read`, compact | 7 | ~1.1k tokens |
 
-`@code-read` is navigation and inspection only (`analyze_calls`,
-`search_*`, `get_symbol_info`, `read_file`, `get_file_problems`, ...);
-`@code` adds the IDE's code-aware editing, building and VCS status
-(`rename_refactoring`, `apply_patch`, `build_project`, `git_status`, ...).
-See `idea_mcp_proxy/tool_filter.py`. Hidden tools are also **refused** if
-called by name. `execute_tool` (which invokes any tool by name) is in no
-preset, since it would get around the filter.
+- `@semantic-read`: `analyze_calls`, `search_symbol`, `get_symbol_info`,
+  `get_file_problems`, `lint_files`, `get_project_modules`,
+  `get_project_dependencies` (and `get_project_status` where the IDE has it).
+- `@semantic` adds `build_project`, `rename_refactoring`, `reformat_file`.
+- `@code` / `@code-read`: the broader earlier presets, including the IDE's
+  text/file tools.
+
+Hidden tools are also **refused** if called by name. `execute_tool` (which
+invokes any tool by name) is in no preset, since it would get around the filter.
 
 ```bash
-idea-mcp-proxy --include-tools @code-read                 # read-only
-idea-mcp-proxy --include-tools '@code,xdebug_*'           # plus the debugger
-idea-mcp-proxy --exclude-tools apply_patch,create_new_file
+idea-mcp-proxy --include-tools @semantic-read             # read-only
+idea-mcp-proxy --include-tools '@semantic,xdebug_*'       # plus the debugger
+idea-mcp-proxy --descriptions original                    # the IDE's own texts
 ```
 
-Also settable as `IDEA_MCP_INCLUDE_TOOLS` / `IDEA_MCP_EXCLUDE_TOOLS`.
+Also settable as `IDEA_MCP_INCLUDE_TOOLS` / `IDEA_MCP_EXCLUDE_TOOLS` /
+`IDEA_MCP_DESCRIPTIONS`.
 
 ### Default `projectPath`
 
@@ -227,9 +239,10 @@ entries to `DISAMBIGUATION_NOTES` only where real confusion shows up.
   "IntelliJ MCP server not reachable at ..." tool error while it's down.
   Covered by `tests/test_upstream_resilience.py`, which stops and
   restarts a fake IDE mid-session.
-- Tool filtering: exposes 21 code tools by default instead of all 62,
-  cutting tool definitions from ~25.6k to ~7k tokens per request; hidden
-  tools are refused. See "Tool filtering".
+- Tool filtering and compact definitions: by default only the 10 tools grep
+  can't replace, with short when-to-use descriptions -- ~1.5k tokens per
+  request instead of ~25.7k for all 62. See "Tool filtering and compact
+  definitions".
 - Default `projectPath` from the client's working directory, so IDE calls
   work with several projects open. See "Default `projectPath`".
 - Description enrichment for 8 tools whose purpose overlaps enough to
