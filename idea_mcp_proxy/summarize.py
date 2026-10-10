@@ -169,7 +169,7 @@ def render_tree(root: CallNode, max_depth: int | None = None, unfiltered: CallNo
             return
         usage_note = f" [{node.usages} usages]" if node.usages > 1 else ""
         # Direction-neutral: for OUTGOING_CALLS the hidden nodes are callees.
-        cut_note = "  [+ more, not shown: depth limit]" if node.cut else ""
+        cut_note = "  [+ more, not shown: render limit]" if node.cut else ""
         lines.append("  " * indent + f"- {node.name}{usage_note}  ({node.file_path}){cut_note}")
         for c in node.children:
             walk(c, indent + 1)
@@ -205,10 +205,10 @@ def _cut_footer(root: CallNode, limit: int = 10) -> str:
     sigs = [n.signature for n in cut[:limit]]
     more = f" (+{len(cut) - limit} more)" if len(cut) > limit else ""
     return (
-        f"\n\nINCOMPLETE: {len(cut)} branch(es) cut at the depth limit -- the tree continues "
-        f"beyond them{more}, possibly including nodes that match the current filters. Call "
-        f"analyze_calls again with a larger `depth`, or with symbolFqn set to one of: "
-        + "; ".join(sigs)
+        f"\n\nINCOMPLETE: {len(cut)} branch(es) cut by a render limit (depth, maxNodes or "
+        f"maxChildren) -- the tree continues beyond them{more}, possibly including nodes that "
+        f"match the current filters. Call analyze_calls again with larger limits, or with "
+        f"symbolFqn set to one of: " + "; ".join(sigs)
     )
 
 

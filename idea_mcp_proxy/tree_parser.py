@@ -78,7 +78,7 @@ class CallNode:
     usages: int = 1
     expandable: bool = False
     # Has callers of its own (the IDE's "+") but none were rendered: the tree
-    # was cut here by the depth limit. Set once at parse time, so a node whose
+    # was cut here by a render limit (depth, maxNodes or maxChildren). Set once at parse time, so a node whose
     # children are later removed by a filter is not mistaken for a cut one.
     cut: bool = False
     truncated_children: int = 0  # count from a "... and N more" marker, if any
