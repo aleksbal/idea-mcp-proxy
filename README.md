@@ -183,8 +183,9 @@ open** in the IDE, a call without it fails ("Unable to determine the target
 project"), and agents rarely pass it unprompted: in the benchmark, 15 of 24
 IDE calls failed this way. The proxy fills it in when a call leaves it out:
 in stdio mode it defaults to the proxy's working directory, which is where
-Claude Code was started, i.e. the project. A `projectPath` the caller passes
-always wins. Override with `--project-path PATH` / `IDEA_MCP_PROJECT_PATH`, or
+Claude Code was started, i.e. the project. A non-empty `projectPath` from the
+caller always wins; an empty one is treated like a missing one (agents send
+`""` when they don't know the project). Override with `--project-path PATH` / `IDEA_MCP_PROJECT_PATH`, or
 disable with `--project-path ''`. HTTP mode has no default (a standalone
 daemon's working directory says nothing about the project).
 

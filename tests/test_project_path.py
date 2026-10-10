@@ -37,11 +37,12 @@ def test_explicit_option_caller_value_and_tools_without_the_param(fake_ide):
     fake_ide.start()
     got = anyio.run(
         _calls, fake_ide.url, ["--project-path", "/proj"],
-        [("where", {}), ("where", {"projectPath": "/mine"}), ("echo", {"text": "x"})],
+        [("where", {}), ("where", {"projectPath": "/mine"}), ("echo", {"text": "x"}), ("where", {"projectPath": ""})],
     )
     # Caller's own value wins; a tool whose schema lacks projectPath gets none
     # (the fake echo tool would ignore it anyway, but it must not error).
-    assert got == ["project:/proj", "project:/mine", "echo:x:gen1"]
+    # An explicit "" means "don't know" from an agent, so it is filled in too.
+    assert got == ["project:/proj", "project:/mine", "echo:x:gen1", "project:/proj"]
 
 
 def test_works_for_a_call_before_any_tools_list(fake_ide):

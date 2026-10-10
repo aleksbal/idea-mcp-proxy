@@ -108,6 +108,9 @@ def build_server(
         pass projectPath unprompted, but the proxy knows the project: in stdio
         mode it runs in the directory the MCP client was started in.
         """
+        # A non-empty projectPath from the caller wins. An empty one is treated
+        # like a missing one on purpose: agents send "" when they don't know the
+        # project, which is exactly the call the IDE can't resolve.
         if not project_path or arguments.get("projectPath"):
             return arguments
         if not schemas_learned:
