@@ -6,19 +6,23 @@ verbose output is trimmed locally before being returned -- see
 analyze_calls_tool.py for why and how.
 
 Run directly:
-    .venv/Scripts/python.exe -m idea_mcp_proxy.server
+    idea-mcp-proxy                     # stdio (launched by the MCP client)
+    idea-mcp-proxy --transport http    # standalone on 127.0.0.1:8765/stream
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import anyio
 import mcp.types as types
-import uvicorn
 from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import ServerRequestContext
+from mcp.server.stdio import stdio_server
 
 from .analyze_calls_tool import WRAPPED_TOOL_NAME, build_wrapped_tool, handle_analyze_calls
 from .tool_descriptions import DISAMBIGUATION_NOTES, with_disambiguation_note
@@ -31,11 +35,14 @@ PROXY_PORT = 8765
 PROXY_PATH = "/stream"
 
 
-@asynccontextmanager
-async def _lifespan(_server: Server) -> AsyncIterator[UpstreamConnection]:
-    async with connect_upstream(DEFAULT_UPSTREAM_URL) as upstream:
-        logger.info("connected to upstream IDE server at %s", DEFAULT_UPSTREAM_URL)
-        yield upstream
+def _make_lifespan(upstream_url: str):
+    @asynccontextmanager
+    async def _lifespan(_server: Server) -> AsyncIterator[UpstreamConnection]:
+        async with connect_upstream(upstream_url) as upstream:
+            logger.info("connected to upstream IDE server at %s", upstream_url)
+            yield upstream
+
+    return _lifespan
 
 
 def _annotate_tool(t: types.Tool) -> types.Tool:
@@ -82,7 +89,7 @@ async def _on_call_tool(
     return await upstream.session.call_tool(params.name, arguments)
 
 
-def build_server() -> Server:
+def build_server(upstream_url: str = DEFAULT_UPSTREAM_URL) -> Server:
     return Server(
         "idea-mcp-proxy",
         version="0.1.0",
@@ -91,17 +98,51 @@ def build_server() -> Server:
             "passed through unchanged except analyze_calls, which is trimmed "
             "locally (see its description for the paths/sourceScope/mode params)."
         ),
-        lifespan=_lifespan,
+        lifespan=_make_lifespan(upstream_url),
         on_list_tools=_on_list_tools,
         on_call_tool=_on_call_tool,
     )
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    server = build_server()
-    app = server.streamable_http_app(streamable_http_path=PROXY_PATH, host=PROXY_HOST)
-    uvicorn.run(app, host=PROXY_HOST, port=PROXY_PORT, log_level="info")
+async def _run_stdio(server: Server) -> None:
+    async with stdio_server() as (read, write):
+        await server.run(read, write, server.create_initialization_options())
+
+
+def _run_http(server: Server, host: str, port: int) -> None:
+    import uvicorn
+
+    app = server.streamable_http_app(streamable_http_path=PROXY_PATH, host=host)
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="idea-mcp-proxy", description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default="stdio",
+        help=(
+            "stdio (default): the MCP client launches the proxy as a child process. "
+            "http: run as a standalone server on --host/--port."
+        ),
+    )
+    parser.add_argument(
+        "--upstream",
+        default=DEFAULT_UPSTREAM_URL,
+        help=f"URL of the JetBrains IDE MCP server (default: {DEFAULT_UPSTREAM_URL})",
+    )
+    parser.add_argument("--host", default=PROXY_HOST, help="http transport only")
+    parser.add_argument("--port", type=int, default=PROXY_PORT, help="http transport only")
+    args = parser.parse_args(argv)
+
+    # stderr only: in stdio mode stdout is the MCP protocol channel.
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+    server = build_server(args.upstream)
+    if args.transport == "stdio":
+        anyio.run(_run_stdio, server)
+    else:
+        _run_http(server, args.host, args.port)
 
 
 if __name__ == "__main__":

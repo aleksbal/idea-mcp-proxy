@@ -5,11 +5,9 @@ an MCP client (Claude Code) and the real IDE server, passes almost every
 tool through unchanged, and locally trims the one tool whose default output
 is disproportionately verbose: `analyze_calls`.
 
-**Status: wired into Claude Code's actual config and running.**
-`~/.claude.json`'s `mcpServers.idea` now points at this proxy
-(`http://127.0.0.1:8765/stream`); the real server is still registered
-under `idea-raw` (`http://127.0.0.1:64342/stream`) as a fallback. Read
-"Current status" below for what that does and doesn't cover.
+**Status: working prototype.** By default it runs over stdio, so Claude
+Code launches it per session -- no daemon to keep alive. See "Running it"
+below, and "Current status" for what it does and doesn't cover.
 
 ## Why this exists
 
@@ -171,26 +169,23 @@ entries to `DISAMBIGUATION_NOTES` only where real confusion shows up.
   using real captured server output as fixtures (`tests/fixtures/`)
 - Bug found and fixed during testing: bracket characters in Java
   array/generic signatures broke the original parsing regex (see above)
-- Wired into `~/.claude.json`: `mcpServers.idea` points at the proxy,
-  `mcpServers.idea-raw` keeps the real server directly reachable as
-  fallback. Started detached (`nohup ... & disown`) so it survives the
-  shell that launched it, PID tracked in `/tmp/proxy_server.pid` for
-  manual restart if needed.
+- stdio transport (default): Claude Code spawns the proxy as a child
+  process per session, so there is no long-running daemon to supervise.
+  The original standalone HTTP mode is still available via
+  `--transport http`. Covered end-to-end by
+  `tests/test_stdio_transport.py` against a fake IDE server.
 - Description enrichment for 8 tools whose purpose overlaps enough to
   cause wrong picks at discovery time (`search_file`/`search_text`/
   `search_regex`/`search_symbol` especially) -- see "Tool description
   enrichment" above.
 
 **Not done:**
-- No process supervision -- started manually, nothing restarts it if it
-  or the IDE crashes, and it does not survive a reboot. A dead proxy
-  breaks every `idea` tool call for every Claude Code session until
-  someone notices and restarts it (see "Running it" below) or flips
-  `mcpServers.idea` back to `idea-raw` in `~/.claude.json`. Worth adding a
-  scheduled task / startup entry if this proves useful enough to keep.
-- Because `~/.claude.json` is read at session start, this only takes
-  effect for **new** Claude Code sessions -- a session already running
-  when the config changed keeps its original direct connection.
+- The upstream connection is opened once at proxy startup: if IntelliJ
+  isn't running then, or restarts mid-session, the proxy doesn't
+  reconnect (start a new Claude Code session, or `/mcp` reconnect).
+  Tracked in [issue 6](https://github.com/aleksbal/idea-mcp-proxy/issues/6).
+- MCP config is read at session start, so changes only take effect for
+  **new** Claude Code sessions.
 - Only `analyze_calls` is wrapped. `get_file_problems`, `search_symbol`
   etc. were spot-checked as "probably fine as-is" but not measured under
   real verbose-output conditions the way `analyze_calls` was.
@@ -211,25 +206,40 @@ entries to `DISAMBIGUATION_NOTES` only where real confusion shows up.
 
 ## Running it
 
+Requires Python 3.11+ and IntelliJ IDEA running with its MCP server
+enabled (by default listening on `http://127.0.0.1:64342/stream`).
+
 ```bash
 cd idea-mcp-proxy
-python -m venv .venv
-./.venv/Scripts/python.exe -m pip install -e ".[dev]"
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"     # Windows: .venv\Scripts\pip
 ```
 
-Start the proxy (requires IntelliJ IDEA running with the MCP plugin active,
-i.e. something already listening on `127.0.0.1:64342`):
+### stdio (recommended)
+
+Register it with Claude Code; Claude Code starts the proxy itself for each
+session:
 
 ```bash
-./.venv/Scripts/python.exe -m idea_mcp_proxy.server
+claude mcp add idea -- /absolute/path/to/idea-mcp-proxy/.venv/bin/idea-mcp-proxy
 ```
 
-Serves on `http://127.0.0.1:8765/stream`.
+If the IDE's MCP server listens elsewhere, pass
+`--upstream http://127.0.0.1:<port>/stream` after the command.
+
+### HTTP (standalone daemon)
+
+```bash
+.venv/bin/idea-mcp-proxy --transport http    # serves http://127.0.0.1:8765/stream
+claude mcp add --transport http idea http://127.0.0.1:8765/stream
+```
+
+You have to keep this process running yourself.
 
 ## Testing
 
 ```bash
-./.venv/Scripts/python.exe -m pytest tests/ -v
+.venv/bin/pytest tests/ -v
 ```
 
 Two dev scripts, both write to `scripts/*.txt` (git-ignored) rather than
@@ -332,16 +342,13 @@ than from scratch.
 
 ## Next steps
 
-1. Decide whether/how to wire into `~/.claude.json` (global -- ask the
-   user first; consider keeping the real server registered under a second
-   name for fallback).
-2. Add the `"... and N more"` truncation case to the parser and test it
+1. Add the `"... and N more"` truncation case to the parser and test it
    against a query that actually exceeds `maxChildren` (none of the
    `SRCByteReader` queries used so far did -- 75 callers is under the
    default 50-per-node limit only because they're spread across multiple
    parent nodes; a flatter high-fan-out symbol would trigger it).
-3. If real usage shows other tools are also verbose in practice, extend
+2. If real usage shows other tools are also verbose in practice, extend
    the same wrap-and-summarize pattern to them -- the passthrough
    architecture makes adding one more wrapped tool cheap.
-4. Measure actual session-level token impact empirically rather than
+3. Measure actual session-level token impact empirically rather than
    relying on the single-query character-count comparison above.
